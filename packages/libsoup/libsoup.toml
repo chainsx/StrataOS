@@ -1,0 +1,9 @@
+name = "libsoup"
+version = "3.6.5"
+kind = "target"
+build_system = "meson"
+dependencies = ["glib", "libxml2", "sqlite", "zlib", "nghttp2", "libpsl"]
+configure_args = ["-Dtests=false", "-Dinstalled_tests=false", "-Ddocs=disabled", "-Dintrospection=disabled", "-Dvapi=disabled", "-Dgssapi=disabled", "-Dntlm=disabled", "-Dbrotli=disabled", "-Dsysprof=disabled", "-Dtls_check=false"]
+
+[source]
+url = "https://download.gnome.org/sources/libsoup/3.6/libsoup-{version}.tar.xz"

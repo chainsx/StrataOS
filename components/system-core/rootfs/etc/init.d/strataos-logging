@@ -1,0 +1,79 @@
+#!/sbin/openrc-run
+
+description="StrataOS system and kernel logging"
+
+depend() {
+    need localmount
+    after strataos-storage
+    before sshd docker
+    provide logger
+}
+
+prune_boot_logs() {
+    index=0
+    for name in $(ls -1t /var/log/boot 2>/dev/null || true); do
+        index=$((index + 1))
+        [ "$index" -le "$LOG_BOOT_COUNT" ] || rm -f -- "/var/log/boot/$name"
+    done
+}
+
+start() {
+    failed=0
+
+    case "$LOG_MODE" in persistent|volatile) : ;; *) eerror "invalid LOG_MODE: $LOG_MODE"; return 1 ;; esac
+    case "$LOG_KERNEL" in yes|no) : ;; *) eerror "invalid LOG_KERNEL: $LOG_KERNEL"; return 1 ;; esac
+    case "$LOG_MAX_FILE_KIB:$LOG_ROTATE_COUNT:$LOG_BOOT_COUNT" in
+        *[!0-9:]*|:*|*::*|*:) eerror "invalid numeric logging configuration"; return 1 ;;
+    esac
+    case "$LOG_REMOTE" in
+        ''|[A-Za-z0-9._:-]*) : ;;
+        *) eerror "invalid LOG_REMOTE: $LOG_REMOTE"; return 1 ;;
+    esac
+
+    checkpath --directory --mode 0750 /var/log
+    checkpath --directory --mode 0750 /var/log/boot
+    checkpath --file --mode 0640 /var/log/messages
+    prune_boot_logs
+
+    set -- -n -O /var/log/messages -s "$LOG_MAX_FILE_KIB" -b "$LOG_ROTATE_COUNT"
+    if [ -n "$LOG_REMOTE" ]; then
+        set -- "$@" -R "$LOG_REMOTE" -L
+    fi
+
+    ebegin "Starting system logger"
+    start-stop-daemon --start --background --make-pidfile \
+        --pidfile /run/syslogd.pid --exec /sbin/syslogd -- "$@"
+    status=$?
+    [ "$status" -eq 0 ] || failed=1
+    eend "$status"
+
+    if [ "$LOG_KERNEL" = yes ]; then
+        ebegin "Starting kernel logger"
+        start-stop-daemon --start --background --make-pidfile \
+            --pidfile /run/klogd.pid --exec /sbin/klogd -- -n
+        status=$?
+        [ "$status" -eq 0 ] || failed=1
+        eend "$status"
+    fi
+
+    return "$failed"
+}
+
+stop() {
+    failed=0
+    if [ -s /run/klogd.pid ]; then
+        ebegin "Stopping kernel logger"
+        start-stop-daemon --stop --pidfile /run/klogd.pid --retry TERM/3/KILL/2
+        status=$?
+        [ "$status" -eq 0 ] || failed=1
+        eend "$status"
+    fi
+
+    ebegin "Stopping system logger"
+    start-stop-daemon --stop --pidfile /run/syslogd.pid --retry TERM/3/KILL/2
+    status=$?
+    [ "$status" -eq 0 ] || failed=1
+    sync
+    eend "$status"
+    return "$failed"
+}

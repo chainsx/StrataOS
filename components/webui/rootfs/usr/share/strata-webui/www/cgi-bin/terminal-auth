@@ -1,0 +1,6 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n'
+printf 'Set-Cookie: strata_terminal=%s; Path=/; HttpOnly; SameSite=Strict\r\n\r\n' "$AUTH_TOKEN"
+printf '{"port":7681}\n'

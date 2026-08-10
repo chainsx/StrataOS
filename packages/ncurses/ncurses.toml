@@ -1,0 +1,9 @@
+name = "ncurses"
+version = "6.5"
+kind = "target"
+build_system = "autotools"
+dependencies = ["host-ncurses"]
+configure_args = ["--with-shared", "--without-normal", "--without-debug", "--without-cxx", "--without-cxx-binding", "--with-build-cc={host_cc}", "--without-ada", "--without-manpages", "--without-tests", "--enable-widec", "--with-tic-path={host}/libexec/host-ncurses/bin/tic", "--with-terminfo-dirs=/usr/share/terminfo"]
+
+[source]
+url = "https://invisible-mirror.net/archives/ncurses/ncurses-{version}.tar.gz"

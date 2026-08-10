@@ -1,0 +1,9 @@
+name = "e2fsprogs"
+version = "1.47.2"
+kind = "target"
+build_system = "autotools"
+dependencies = ["util-linux"]
+configure_args = ["--enable-elf-shlibs", "--disable-uuidd", "--disable-nls", "--disable-debugfs", "--disable-imager", "--disable-defrag", "--disable-libuuid", "--disable-libblkid"]
+
+[source]
+url = "https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{version}/e2fsprogs-{version}.tar.xz"

@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+wait_for_completion=no
+case "${1:-}" in
+    '') : ;;
+    --wait) wait_for_completion=yes ;;
+    -h|--help)
+        echo "Usage: strataos-storage-scrub [--wait]"
+        exit 0
+        ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+esac
+
+[ "$(id -u)" -eq 0 ] || { echo "must be run as root" >&2; exit 1; }
+
+found=no
+failed=no
+for md_dir in /sys/block/md*/md; do
+    [ -d "$md_dir" ] || continue
+    found=yes
+    block="${md_dir%/md}"
+    name="${block##*/}"
+    action="$(cat "$md_dir/sync_action" 2>/dev/null || printf unknown)"
+    case "$action" in
+        idle|frozen)
+            echo check > "$md_dir/sync_action" \
+                || { echo "$name: cannot start RAID check" >&2; failed=yes; continue; }
+            logger -t strataos-storage "started RAID consistency check for $name" 2>/dev/null || true
+            echo "$name: check started"
+            ;;
+        *)
+            echo "$name: existing sync action is $action; not starting another"
+            continue
+            ;;
+    esac
+
+    [ "$wait_for_completion" = yes ] || continue
+    while :; do
+        action="$(cat "$md_dir/sync_action" 2>/dev/null || printf unknown)"
+        [ "$action" = idle ] && break
+        case "$action" in check|repair|resync|recover|reshape) : ;; *) break ;; esac
+        sleep 5
+    done
+    mismatch="$(cat "$md_dir/mismatch_cnt" 2>/dev/null || printf unknown)"
+    echo "$name: check complete; mismatch_cnt=$mismatch"
+    if [ "$mismatch" != 0 ] && [ "$mismatch" != unknown ]; then
+        logger -p daemon.warning -t strataos-storage \
+            "RAID consistency mismatch on $name: mismatch_cnt=$mismatch" 2>/dev/null || true
+        failed=yes
+    else
+        logger -t strataos-storage "RAID consistency check completed for $name" 2>/dev/null || true
+    fi
+done
+
+[ "$found" = yes ] || { echo "no active StrataOS RAID volumes"; exit 0; }
+[ "$failed" = no ]

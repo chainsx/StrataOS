@@ -1,0 +1,28 @@
+name = "openrc"
+version = "0.56"
+kind = "target"
+build_system = "meson"
+dependencies = ["musl-runtime", "libcap"]
+patches = [
+    "openrc-cgroup-v2-explicit-pid.patch",
+    "openrc-shutdown-command-aliases.patch",
+]
+
+configure_args = [
+    "-Ddefault_library=shared",
+    "-Daudit=disabled",
+    "-Dbash-completions=false",
+    "-Dlocal_prefix=/usr/local",
+    "-Dnewnet=false",
+    "-Dos=Linux",
+    "-Dpam=false",
+    "-Dpkg_prefix=/usr",
+    "-Dpkgconfig=true",
+    "-Dselinux=disabled",
+    "-Dshell=/bin/sh",
+    "-Dsysvinit=false",
+    "-Dzsh-completions=false",
+]
+
+[source]
+url = "https://github.com/OpenRC/openrc/archive/refs/tags/{version}.tar.gz"

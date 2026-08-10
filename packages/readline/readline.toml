@@ -1,0 +1,10 @@
+name = "readline"
+version = "8.2"
+kind = "target"
+build_system = "autotools"
+dependencies = ["ncurses"]
+configure_args = ["--disable-static", "--enable-shared", "--with-curses"]
+patches = ["readline-shlib-ncurses.patch"]
+
+[source]
+url = "https://ftp.gnu.org/gnu/readline/readline-{version}.tar.gz"

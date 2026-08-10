@@ -1,0 +1,9 @@
+name = "libarchive"
+version = "3.8.1"
+kind = "target"
+build_system = "cmake"
+dependencies = ["zlib", "zstd", "xz", "bzip2", "openssl", "libxml2"]
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DCMAKE_INSTALL_LIBDIR=lib", "-DENABLE_TEST=OFF", "-DENABLE_WERROR=OFF", "-DENABLE_OPENSSL=ON", "-DENABLE_ZLIB=ON", "-DENABLE_ZSTD=ON", "-DENABLE_LZMA=ON", "-DENABLE_BZip2=ON", "-DENABLE_LIBXML2=ON", "-DENABLE_EXPAT=OFF", "-DENABLE_LZO=OFF", "-DENABLE_LZ4=OFF", "-DENABLE_NETTLE=OFF", "-DENABLE_MBEDTLS=OFF", "-DENABLE_ICONV=OFF", "-DENABLE_ACL=OFF", "-DHAVE_ARC4RANDOM_BUF=OFF", "-DHAVE__FSEEKI64=OFF", "-DHAVE_READPASSPHRASE=OFF"]
+
+[source]
+url = "https://github.com/libarchive/libarchive/releases/download/v{version}/libarchive-{version}.tar.xz"

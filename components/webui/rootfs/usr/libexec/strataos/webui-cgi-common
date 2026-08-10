@@ -1,0 +1,37 @@
+#!/bin/sh
+
+json_escape() {
+    sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\r/\\r/g' |
+        awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }'
+}
+
+authorized() {
+    AUTH_TOKEN=${HTTP_AUTHORIZATION#Bearer }
+    [ "$AUTH_TOKEN" != "${HTTP_AUTHORIZATION:-}" ] || return 1
+    case "$AUTH_TOKEN" in ''|*[!A-Fa-f0-9]*) return 1 ;; esac
+    [ "${#AUTH_TOKEN}" -eq 64 ] || return 1
+    session=/run/strata-webui/auth-sessions/$AUTH_TOKEN
+    [ -f "$session" ] || return 1
+    old_ifs=$IFS
+    IFS="$(printf '\t')"
+    read -r expires AUTH_USER < "$session" || { IFS=$old_ifs; return 1; }
+    IFS=$old_ifs
+    case "$expires" in ''|*[!0-9]*) return 1 ;; esac
+    if [ "$(date +%s)" -ge "$expires" ]; then
+        rm -f "$session"
+        return 1
+    fi
+    export AUTH_TOKEN AUTH_USER
+}
+
+require_auth() {
+    if ! authorized; then
+        printf 'Status: 401 Unauthorized\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+        printf '{"error":"unauthorized"}\n'
+        exit 0
+    fi
+}
+
+json_headers() {
+    printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+}

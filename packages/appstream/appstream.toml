@@ -1,0 +1,10 @@
+name = "appstream"
+version = "1.0.4"
+kind = "target"
+build_system = "meson"
+dependencies = ["glib", "libxml2", "libxmlb", "libyaml", "curl", "zstd"]
+patches = ["appstream-cross-native-cli.patch"]
+configure_args = ["-Dapidocs=false", "-Dapt-support=false", "-Dcompose=false", "-Ddocs=false", "-Dgir=false", "-Dinstall-docs=false", "-Dmaintainer=false", "-Dqt=false", "-Dstatic-analysis=false", "-Dstemming=false", "-Dsystemd=false", "-Dvapi=false", "-Dzstd-support=true"]
+
+[source]
+url = "https://www.freedesktop.org/software/appstream/releases/AppStream-{version}.tar.xz"

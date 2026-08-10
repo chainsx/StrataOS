@@ -1,0 +1,14 @@
+name = "host-glslang"
+version = "16.5.0"
+kind = "host"
+build_system = "special"
+special = "host-glslang"
+dependencies = []
+
+[source.x86_64]
+url = "https://github.com/KhronosGroup/glslang/releases/download/{version}/glslang-{version}-linux-x86_64-release.tar.gz"
+strip_components = 0
+
+[source.arm64]
+url = "https://github.com/KhronosGroup/glslang/archive/refs/tags/{version}.tar.gz"
+strip_components = 1

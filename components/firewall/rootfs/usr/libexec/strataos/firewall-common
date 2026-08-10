@@ -1,0 +1,103 @@
+#!/bin/sh
+# Shared helpers for the firewall CGI backend: runtime config lookup,
+# protected-port enforcement, and confirm/rollback timer management.
+
+FW_DIR=/etc/strataos/firewall
+FW_CONF=$FW_DIR/firewall.conf
+FW_RULESET=$FW_DIR/ruleset.nft
+FW_PREVIOUS=$FW_DIR/previous.nft
+FW_CANDIDATE=/run/strataos/firewall-candidate.nft
+FW_ROLLBACK_PID=/run/strataos/firewall-rollback.pid
+FW_ROLLBACK_DEADLINE=/run/strataos/firewall-rollback.deadline
+FALLBACK=/usr/share/strataos/firewall/fallback.nft
+NETWORK_NAT_RULESET=/etc/strataos/network-nat.nft
+
+fw_apply_network_nat() {
+    [ -s "$NETWORK_NAT_RULESET" ] || return 0
+    nft -c -f "$NETWORK_NAT_RULESET" 2>/dev/null && nft -f "$NETWORK_NAT_RULESET"
+}
+
+fw_reload_fail2ban() {
+    command -v fail2ban-client >/dev/null 2>&1 || return 0
+    rc-service fail2ban status >/dev/null 2>&1 || return 0
+    fail2ban-client -s /run/fail2ban/fail2ban.sock reload >/dev/null 2>&1 || true
+}
+
+fw_kv_get() {
+    file="$1" key="$2" default="$3"
+    value="$(awk -F= -v key="$key" '
+        $0 !~ /^[[:space:]]*#/ && $1 == key {
+            sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit
+        }
+    ' "$file" 2>/dev/null)"
+    [ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+fw_confirm_timeout() {
+    fw_kv_get "$FW_CONF" confirm_timeout 90
+}
+
+# Protected management ports that a rule or preset may never block.
+# Covers SSH (22), WebUI (9090), noVNC (6080), ttyd (7681), VNC range (7690-7789).
+fw_protected_ports() {
+    printf '22 9090 6080 7681\n'
+}
+
+fw_is_protected_port() {
+    port="$1"
+    for protected in $(fw_protected_ports); do
+        [ "$port" = "$protected" ] && return 0
+    done
+    [ "$port" -ge 7690 ] 2>/dev/null && [ "$port" -le 7789 ] 2>/dev/null && return 0
+    return 1
+}
+
+# Returns 0 if a deny rule for the given port spec would block a management port.
+# Handles both single ports (e.g. "22") and ranges (e.g. "20-23").
+fw_deny_blocks_protected() {
+    spec="$1"
+    case "$spec" in
+        *-*)
+            lo="${spec%%-*}"
+            hi="${spec##*-}"
+            for p in $(fw_protected_ports); do
+                [ "$p" -ge "$lo" ] 2>/dev/null && [ "$p" -le "$hi" ] 2>/dev/null && return 0
+            done
+            # Overlap with VNC range 7690-7789: overlap unless hi<7690 or lo>7789
+            { [ "$hi" -lt 7690 ] 2>/dev/null || [ "$lo" -gt 7789 ] 2>/dev/null; } || return 0
+            return 1
+            ;;
+        *)
+            fw_is_protected_port "$spec"
+            ;;
+    esac
+}
+
+fw_rollback_pending() {
+    [ -s "$FW_ROLLBACK_PID" ] && kill -0 "$(cat "$FW_ROLLBACK_PID")" 2>/dev/null
+}
+
+fw_start_rollback_timer() {
+    seconds="$1"
+    fw_cancel_rollback_timer
+    (
+        sleep "$seconds"
+        if [ -s "$FW_PREVIOUS" ]; then
+            nft -f "$FW_PREVIOUS" 2>/dev/null
+        else
+            nft -f "$FALLBACK" 2>/dev/null
+        fi
+        fw_apply_network_nat 2>/dev/null || true
+        fw_reload_fail2ban 2>/dev/null || true
+        rm -f "$FW_CANDIDATE" "$FW_ROLLBACK_DEADLINE" "$FW_ROLLBACK_PID"
+    ) >/dev/null 2>&1 &
+    echo $! > "$FW_ROLLBACK_PID"
+    echo "$(( $(date +%s) + $seconds ))" > "$FW_ROLLBACK_DEADLINE"
+}
+
+fw_cancel_rollback_timer() {
+    if [ -s "$FW_ROLLBACK_PID" ]; then
+        kill "$(cat "$FW_ROLLBACK_PID")" 2>/dev/null
+        rm -f "$FW_ROLLBACK_PID" "$FW_ROLLBACK_DEADLINE"
+    fi
+}

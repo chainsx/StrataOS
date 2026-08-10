@@ -1,0 +1,11 @@
+name = "libgcrypt"
+version = "1.11.1"
+kind = "target"
+build_system = "autotools"
+dependencies = ["libgpg-error"]
+configure_args = ["--disable-static", "--enable-shared", "--disable-doc"]
+environment = ["GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config"]
+
+[source]
+url = "https://gnupg.org/ftp/gcrypt/libgcrypt/libgcrypt-{version}.tar.bz2"
+sha256 = "24e91c9123a46c54e8371f3a3a2502f1198f2893fbfbf59af95bc1c21499b00e"

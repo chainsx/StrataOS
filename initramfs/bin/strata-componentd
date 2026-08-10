@@ -1,0 +1,581 @@
+#!/bin/sh
+set -eu
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+ESP=/run/strata-esp
+DATA=/run/strata-data
+NEWROOT=/newroot
+BACKING_STORE=/strata-backing
+OVERLAY_STORE=$BACKING_STORE/overlay
+COMPONENT_STORE=$BACKING_STORE/components
+# Keep OverlayFS lowerdir entries short. Some BusyBox mount builds use a small
+# option buffer, so long internal paths fail once enough components are active.
+LOWER_STORE=/l
+CONFIG=/run/strata-esp/strataos/config
+EARLY_LOG=/run/strataos/early-boot.log
+PSTORE=/sys/fs/pstore
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --esp) ESP="$2"; shift 2 ;;
+        --data) DATA="$2"; shift 2 ;;
+        --newroot) NEWROOT="$2"; shift 2 ;;
+        --config) CONFIG="$2"; shift 2 ;;
+        --early-log) EARLY_LOG="$2"; shift 2 ;;
+        --pstore) PSTORE="$2"; shift 2 ;;
+        *) echo "strata-componentd: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
+log() {
+    message="strata-componentd: $*"
+    printf '%s\n' "$message" >/dev/console 2>/dev/null || printf '%s\n' "$message"
+    printf '%s\n' "$message" >> "$EARLY_LOG" 2>/dev/null || true
+}
+
+panic() {
+    log "FATAL: $*"
+    log "dropping to the initramfs recovery shell"
+    exec sh
+}
+
+kv_get() {
+    file="$1" key="$2" default="${3:-}"
+    value="$(awk -F= -v key="$key" '
+        $0 !~ /^[[:space:]]*#/ && $1 == key {
+            sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit
+        }
+    ' "$file")"
+    [ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+is_uint() {
+    case "$1" in ''|*[!0-9]*) return 1;; *) return 0;; esac
+}
+
+safe_id() {
+    case "$1" in ''|*[!a-z0-9-]*) return 1;; *) return 0;; esac
+}
+
+runtime_volume_id() {
+    component="$1" id="$2"
+    key="$component-$id"
+    digest="$(printf '%s/%s' "$component" "$id" | sha256sum | awk '{print substr($1,1,12)}')"
+    printf '%.11s-%s\n' "$key" "$digest"
+}
+
+verify_component() {
+    file="$1"
+    base="${file##*/}"
+    expected="${base%.squashfs}"
+    expected="${expected##*-}"
+    case "$expected" in ''|*[!0-9a-f]*) return 1;; esac
+    [ "${#expected}" -eq 64 ] || return 1
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+    [ "$actual" = "$expected" ]
+}
+
+resolve_source() {
+    source="$1"
+    case "$source" in
+        LABEL=*) blkid -L "${source#LABEL=}" ;;
+        PARTUUID=*) blkid -t "PARTUUID=${source#PARTUUID=}" -o device | head -n1 ;;
+        *) return 1 ;;
+    esac
+}
+
+STORAGE_CONF="$CONFIG/storage.conf"
+LOGGING_CONF="$CONFIG/logging.conf"
+COMPONENTS_CONF="$CONFIG/components.conf"
+DATA_PATH="$(kv_get "$STORAGE_CONF" backend.data.path /strataos)"
+case "$DATA_PATH" in
+    /*) : ;;
+    *) panic "backend.data.path must be absolute" ;;
+esac
+case "$DATA_PATH" in *..*|*//* ) panic "backend.data.path is unsafe" ;; esac
+BASE="$DATA$DATA_PATH"
+mkdir -p "$BACKING_STORE"
+mount -t tmpfs -o mode=0755,size=50% tmpfs "$BACKING_STORE" \
+    || panic "cannot create root backing tmpfs"
+mkdir -p "$BASE/components" "$BASE/slots" "$BASE/volumes" "$BASE/state" \
+    "$BASE/transactions" "$COMPONENT_STORE" /run/strataos/backends \
+    /run/strataos/volumes "$LOWER_STORE"
+VOLUME_OVERRIDES="$BASE/state/volume-overrides.conf"
+
+volume_kv_get() {
+    key="$1" default="$2"
+    if [ ! -f "$VOLUME_OVERRIDES" ]; then
+        printf '%s\n' "$default"
+        return 0
+    fi
+    value="$(kv_get "$VOLUME_OVERRIDES" "$key" '')"
+    [ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+backend_root() {
+    id="$1"
+    type="$(kv_get "$STORAGE_CONF" "backend.$id.type" '')"
+    [ "$type" = filesystem ] || panic "backend $id has unsupported type: $type"
+    path="$(kv_get "$STORAGE_CONF" "backend.$id.path" /strataos)"
+    case "$path" in /*) :;; *) panic "backend $id path must be absolute";; esac
+    case "$path" in *..*|*//*) panic "backend $id path is unsafe";; esac
+    if [ "$id" = data ]; then
+        printf '%s%s\n' "$DATA" "$path"
+        return 0
+    fi
+    mountpoint="/run/strataos/backends/$id"
+    if ! findmnt -rn "$mountpoint" >/dev/null 2>&1; then
+        source="$(kv_get "$STORAGE_CONF" "backend.$id.source" '')"
+        filesystem="$(kv_get "$STORAGE_CONF" "backend.$id.filesystem" ext4)"
+        device="$(resolve_source "$source" 2>/dev/null || true)"
+        [ -n "$device" ] || panic "backend $id source $source not found"
+        mkdir -p "$mountpoint"
+        mount -t "$filesystem" -o rw,noatime "$device" "$mountpoint" \
+            || panic "cannot mount backend $id"
+    fi
+    printf '%s%s\n' "$mountpoint" "$path"
+}
+
+DEFAULT_BACKEND="$(kv_get "$STORAGE_CONF" volume.default.backend data)"
+DEFAULT_MIRROR_BACKEND="$(kv_get "$STORAGE_CONF" volume.default.mirror_backend "$DEFAULT_BACKEND")"
+DEFAULT_REDUNDANCY="$(kv_get "$STORAGE_CONF" volume.default.redundancy none)"
+DEFAULT_INTEGRITY="$(kv_get "$STORAGE_CONF" volume.default.integrity crc32c)"
+DEFAULT_GROWTH="$(kv_get "$STORAGE_CONF" volume.default.growth boot-only)"
+PREALLOCATE="$(kv_get "$STORAGE_CONF" volume.default.preallocate yes)"
+FSCK_POLICY="$(kv_get "$STORAGE_CONF" volume.default.fsck preen)"
+LOG_MODE="$(kv_get "$LOGGING_CONF" mode persistent)"
+LOG_EARLY_BOOT="$(kv_get "$LOGGING_CONF" early_boot_log yes)"
+LOG_KERNEL="$(kv_get "$LOGGING_CONF" kernel_log yes)"
+LOG_OPERATION="$(kv_get "$LOGGING_CONF" operation_log yes)"
+
+allocate_file() (
+    file="$1" size_mib="$2"
+    mkdir -p "${file%/*}"
+    if [ "$PREALLOCATE" = yes ] && command -v fallocate >/dev/null 2>&1; then
+        fallocate -l "${size_mib}M" "$file"
+    else
+        truncate -s "${size_mib}M" "$file"
+    fi
+)
+
+ensure_member_file() {
+    file="$1" size_mib="$2" allow_growth="$3"
+    is_uint "$size_mib" || panic "invalid volume size: $size_mib"
+    [ "$size_mib" -ge 16 ] || panic "volume size must be at least 16 MiB"
+    target=$((size_mib * 1024 * 1024))
+    changed=no
+    created=no
+    if [ ! -e "$file" ]; then
+        log "creating volume member ${file##*/} (${size_mib} MiB)"
+        allocate_file "$file.partial" "$size_mib" || panic "cannot allocate $file"
+        sync "$file.partial" 2>/dev/null || sync
+        mv "$file.partial" "$file"
+        created=yes
+        changed=yes
+    else
+        current="$(/usr/bin/stat -c %s "$file")"
+        if [ "$current" -lt "$target" ]; then
+            [ "$allow_growth" = yes ] || panic "fixed volume ${file##*/} is smaller than requested"
+            log "growing volume member ${file##*/} to ${size_mib} MiB"
+            if [ "$PREALLOCATE" = yes ] && command -v fallocate >/dev/null 2>&1; then
+                fallocate -l "${size_mib}M" "$file" || panic "cannot grow $file"
+            else
+                truncate -s "${size_mib}M" "$file" || panic "cannot grow $file"
+            fi
+            changed=yes
+        fi
+    fi
+    printf '%s|%s\n' "$created" "$changed"
+}
+
+attach_loop() {
+    file="$1"
+    losetup -f --show "$file" || panic "cannot attach loop for $file"
+}
+
+md_device() {
+    id="$1"
+    mkdir -p /dev/md
+    printf '/dev/md/strata-%s\n' "$id"
+}
+
+assemble_md() {
+    id="$1" first="$2" second="$3" new_array="$4"
+    md="$(md_device "$id")"
+    mdadm --stop "$md" >/dev/null 2>&1 || true
+    if [ "$new_array" = yes ]; then
+        mdadm --create "$md" --run --metadata=1.2 --level=1 --raid-devices=2 \
+            --bitmap=internal --name="strata:$id" --force "$first" "$second" \
+            > "/run/strataos/${id}-md-create.log" 2>&1 \
+            || panic "cannot create RAID1 for $id"
+    else
+        mdadm --assemble --run "$md" "$first" "$second" \
+            > "/run/strataos/${id}-md-assemble.log" 2>&1 \
+            || panic "cannot assemble RAID1 for $id"
+    fi
+    printf '%s\n' "$md"
+}
+
+open_integrity() {
+    id="$1" side="$2" loop="$3" created="$4" changed="$5" integrity="$6"
+    name="strata-${id}-${side}"
+    if [ "$created" = yes ]; then
+        integritysetup format --batch-mode --integrity "$integrity" --sector-size 4096 \
+            "$loop" > "/run/strataos/${id}-${side}-integrity-format.log" 2>&1 \
+            || panic "cannot format dm-integrity member $id/$side"
+    fi
+    integritysetup close "$name" >/dev/null 2>&1 || true
+    integritysetup open "$loop" "$name" \
+        > "/run/strataos/${id}-${side}-integrity-open.log" 2>&1 \
+        || panic "cannot open dm-integrity member $id/$side"
+    if [ "$changed" = yes ] && [ "$created" != yes ]; then
+        integritysetup resize --wipe "$name" \
+            > "/run/strataos/${id}-${side}-integrity-resize.log" 2>&1 \
+            || panic "cannot resize dm-integrity member $id/$side"
+    fi
+    printf '/dev/mapper/%s\n' "$name"
+}
+
+check_and_resize_ext4() {
+    id="$1" device="$2" changed="$3" created="$4"
+    type="$(blkid -p -s TYPE -o value "$device" 2>/dev/null || true)"
+    if [ -z "$type" ]; then
+        log "formatting logical ext4 volume $id"
+        label="$(printf 'STRATA-%s' "$id" | cut -c1-16)"
+        mkfs.ext4 -F -m 0 -O metadata_csum,64bit,dir_index,extent -E lazy_itable_init=0,lazy_journal_init=0 \
+            -L "$label" "$device" > "/run/strataos/${id}-mkfs.log" 2>&1 \
+            || panic "cannot format $id"
+        created=yes
+    elif [ "$type" != ext4 ]; then
+        panic "logical volume $id contains unsupported filesystem $type"
+    fi
+    case "$FSCK_POLICY" in
+        preen)
+            rc=0
+            e2fsck -pf "$device" > "/run/strataos/${id}-fsck.log" 2>&1 || rc=$?
+            [ "$rc" -le 1 ] || panic "filesystem check failed for $id (code $rc)"
+            ;;
+        readonly)
+            e2fsck -fn "$device" > "/run/strataos/${id}-fsck.log" 2>&1 || true ;;
+        manual) : ;;
+        *) panic "invalid fsck policy: $FSCK_POLICY" ;;
+    esac
+    if [ "$changed" = yes ] && [ "$created" != yes ]; then
+        resize2fs "$device" > "/run/strataos/${id}-resize.log" 2>&1 \
+            || panic "cannot resize ext4 volume $id"
+    fi
+}
+
+create_volume_device() {
+    component="$1" id="$2" image="$3" size_mib="$4" growth="$5" redundancy="$6" legacy_component="$7"
+    runtime_id="$(runtime_volume_id "$component" "$id")"
+    backend="$(kv_get "$STORAGE_CONF" "override.$component.$id.backend" '')"
+    [ -n "$backend" ] || [ -z "$legacy_component" ] \
+        || backend="$(kv_get "$STORAGE_CONF" "override.$legacy_component.$id.backend" '')"
+    backend="${backend:-$DEFAULT_BACKEND}"
+    mirror_backend="$(kv_get "$STORAGE_CONF" "override.$component.$id.mirror_backend" '')"
+    [ -n "$mirror_backend" ] || [ -z "$legacy_component" ] \
+        || mirror_backend="$(kv_get "$STORAGE_CONF" "override.$legacy_component.$id.mirror_backend" '')"
+    mirror_backend="${mirror_backend:-$DEFAULT_MIRROR_BACKEND}"
+    configured_size="$(kv_get "$STORAGE_CONF" "override.$component.$id.size_mib" '')"
+    [ -n "$configured_size" ] || [ -z "$legacy_component" ] \
+        || configured_size="$(kv_get "$STORAGE_CONF" "override.$legacy_component.$id.size_mib" '')"
+    configured_size="${configured_size:-$size_mib}"
+    size_override="$(volume_kv_get "override.$component.$id.size_mib" '')"
+    [ -n "$size_override" ] || [ -z "$legacy_component" ] \
+        || size_override="$(volume_kv_get "override.$legacy_component.$id.size_mib" '')"
+    size_override="${size_override:-$configured_size}"
+    is_uint "$size_override" || panic "invalid size override for $component/$id"
+    [ "$size_override" -ge "$size_mib" ] || panic "size override may not shrink $component/$id"
+    size_mib="$size_override"
+    growth_override="$(volume_kv_get "override.$component.$id.growth" '')"
+    [ -n "$growth_override" ] || [ -z "$legacy_component" ] \
+        || growth_override="$(volume_kv_get "override.$legacy_component.$id.growth" '')"
+    growth="${growth_override:-$growth}"
+    [ "$growth" != inherit ] || growth="$DEFAULT_GROWTH"
+    case "$growth" in boot-only|grow-only) allow_growth=yes;; fixed) allow_growth=no;; *) panic "invalid growth policy for $id";; esac
+    primary_root="$(backend_root "$backend")"
+    mkdir -p "$primary_root/volumes/$component"
+
+    case "$redundancy" in
+        none)
+            file="$primary_root/volumes/$component/$image"
+            legacy_file="$primary_root/volumes/$legacy_component/$image"
+            if [ -n "$legacy_component" ] && [ ! -e "$file" ] && [ -e "$legacy_file" ]; then
+                log "migrating volume owner $legacy_component/$image to $component"
+                mv "$legacy_file" "$file" || panic "cannot migrate legacy volume $legacy_component/$image"
+            fi
+            state="$(ensure_member_file "$file" "$size_mib" "$allow_growth")"
+            created="${state%%|*}"; changed="${state##*|}"
+            loop="$(attach_loop "$file")"
+            [ "$changed" = yes ] && losetup -c "$loop" 2>/dev/null || true
+            check_and_resize_ext4 "$runtime_id" "$loop" "$changed" "$created"
+            printf '%s|%s\n' "$loop" "$file"
+            ;;
+        mirror|integrity-mirror)
+            secondary_root="$(backend_root "$mirror_backend")"
+            mkdir -p "$secondary_root/volumes/$component"
+            stem="${image%.ext4}"
+            first_file="$primary_root/volumes/$component/${stem}.a.ext4"
+            second_file="$secondary_root/volumes/$component/${stem}.b.ext4"
+            legacy_first="$primary_root/volumes/$legacy_component/${stem}.a.ext4"
+            legacy_second="$secondary_root/volumes/$legacy_component/${stem}.b.ext4"
+            if [ -n "$legacy_component" ] && [ ! -e "$first_file" ] && [ ! -e "$second_file" ] \
+                && [ -e "$legacy_first" ] && [ -e "$legacy_second" ]; then
+                log "migrating mirrored volume owner $legacy_component/$image to $component"
+                mv "$legacy_first" "$first_file" \
+                    || panic "cannot migrate first legacy mirrored member $legacy_component/$image"
+                if ! mv "$legacy_second" "$second_file"; then
+                    mv "$first_file" "$legacy_first" 2>/dev/null || true
+                    panic "cannot migrate second legacy mirrored member $legacy_component/$image"
+                fi
+            fi
+            first_state="$(ensure_member_file "$first_file" "$size_mib" "$allow_growth")"
+            second_state="$(ensure_member_file "$second_file" "$size_mib" "$allow_growth")"
+            first_created="${first_state%%|*}"; first_changed="${first_state##*|}"
+            second_created="${second_state%%|*}"; second_changed="${second_state##*|}"
+            [ "$first_created" = "$second_created" ] \
+                || panic "mirror $id has only one newly created member; manual recovery required"
+            first_loop="$(attach_loop "$first_file")"
+            second_loop="$(attach_loop "$second_file")"
+            [ "$first_changed" = yes ] && losetup -c "$first_loop" 2>/dev/null || true
+            [ "$second_changed" = yes ] && losetup -c "$second_loop" 2>/dev/null || true
+            first_device="$first_loop"; second_device="$second_loop"
+            if [ "$redundancy" = integrity-mirror ]; then
+                first_device="$(open_integrity "$runtime_id" a "$first_loop" "$first_created" "$first_changed" "$DEFAULT_INTEGRITY")"
+                second_device="$(open_integrity "$runtime_id" b "$second_loop" "$second_created" "$second_changed" "$DEFAULT_INTEGRITY")"
+            fi
+            md="$(assemble_md "$runtime_id" "$first_device" "$second_device" "$first_created")"
+            changed=no
+            [ "$first_changed" = yes ] && changed=yes
+            [ "$second_changed" = yes ] && changed=yes
+            if [ "$changed" = yes ] && [ "$first_created" != yes ]; then
+                mdadm --grow "$md" --size=max > "/run/strataos/${runtime_id}-md-grow.log" 2>&1 \
+                    || panic "cannot grow RAID1 volume $id"
+            fi
+            check_and_resize_ext4 "$runtime_id" "$md" "$changed" "$first_created"
+            printf '%s|%s,%s\n' "$md" "$first_file" "$second_file"
+            ;;
+        *) panic "unsupported redundancy mode $redundancy for $id" ;;
+    esac
+}
+
+ACTIVE_FILE="$BASE/active-slot"
+[ -s "$ACTIVE_FILE" ] || panic "missing active-slot"
+ACTIVE="$(cat "$ACTIVE_FILE")"
+case "$ACTIVE" in ''|*/*|*..*|*[!A-Za-z0-9._-]*) panic "invalid active slot";; esac
+LIST="$BASE/slots/$ACTIVE/components.list"
+[ -s "$LIST" ] || panic "missing components.list for slot $ACTIVE"
+
+INVENTORY=/run/strataos/component-inventory
+SORTED=/run/strataos/component-inventory.sorted
+SEEN=/run/strataos/components.seen
+PRIORITIES=/run/strataos/priorities.seen
+VOLUME_PLAN=/run/strataos/volume-plan
+BIND_PLAN=/run/strataos/bind-plan
+APPLIED_BINDS=/run/strataos/binds.tsv
+: > "$INVENTORY"; : > "$SEEN"; : > "$PRIORITIES"; : > "$VOLUME_PLAN"; : > "$BIND_PLAN"; : > "$APPLIED_BINDS"
+component_count=0
+
+while IFS= read -r rel || [ -n "$rel" ]; do
+    case "$rel" in ''|'#'*) continue;; /*|*..*) panic "unsafe component path: $rel";; esac
+    file="$BASE/$rel"
+    [ -f "$file" ] || panic "component not found: $rel"
+    verify_component "$file" || panic "component hash mismatch: $rel"
+    loop="$(losetup -f --show -r "$file")" || panic "cannot attach $rel"
+    mountpoint="$COMPONENT_STORE/c$component_count"
+    mkdir -p "$mountpoint"
+    mount -t squashfs -o ro,nodev "$loop" "$mountpoint" \
+        || panic "cannot mount component $rel"
+    meta="$mountpoint/meta/strataos/component.conf"
+    root="$mountpoint/rootfs"
+    [ -s "$meta" ] && [ -d "$root" ] || panic "invalid component layout: $rel"
+    [ "$(kv_get "$meta" format 0)" = 1 ] || panic "unsupported component format: $rel"
+    name="$(kv_get "$meta" name '')"
+    safe_id "$name" || panic "invalid component name in $rel"
+    enabled="$(kv_get "$COMPONENTS_CONF" "component.$name.enabled" yes)"
+    case "$enabled" in
+        yes) ;;
+        no)
+            log "component $name disabled by ESP policy"
+            umount "$mountpoint" || panic "cannot unmount disabled component $name"
+            losetup -d "$loop" || panic "cannot detach disabled component $name"
+            rmdir "$mountpoint" || panic "cannot remove disabled component mount $name"
+            continue
+            ;;
+        *) panic "invalid enabled policy for component $name" ;;
+    esac
+    ln -s "$root" "$LOWER_STORE/$component_count" \
+        || panic "cannot create short lowerdir path for $rel"
+    architectures="$(kv_get "$meta" architectures '')"
+    machine="$(uname -m)"
+    [ "$machine" != aarch64 ] || machine=arm64
+    [ "$architectures" = "$machine" ] \
+        || panic "component $name must target exactly architecture $machine"
+    grep -qxF "$name" "$SEEN" && panic "duplicate component name $name"
+    printf '%s\n' "$name" >> "$SEEN"
+    priority="$(kv_get "$meta" priority 500)"
+    is_uint "$priority" || panic "invalid priority in $rel"
+    grep -qxF "$priority" "$PRIORITIES" && panic "duplicate priority $priority"
+    printf '%s\n' "$priority" >> "$PRIORITIES"
+    # Priority is unique, so the sequence field does not need zero padding.
+    # Keeping it compact also minimizes the OverlayFS lowerdir option.
+    printf '%05d|%s|%s|%s\n' "$priority" "$component_count" "$rel" "$mountpoint" >> "$INVENTORY"
+    component_count=$((component_count + 1))
+done < "$LIST"
+
+[ "$component_count" -gt 0 ] || panic "active slot contains no components"
+sort "$INVENTORY" > "$SORTED"
+lowerdirs=""
+core_seen=no
+
+while IFS='|' read -r priority sequence rel mountpoint; do
+    meta="$mountpoint/meta/strataos/component.conf"
+    root="$mountpoint/rootfs"
+    name="$(kv_get "$meta" name '')"
+    [ "$name" = system-core ] && core_seen=yes
+    requires="$(kv_get "$meta" requires '')"
+    old_ifs="$IFS"
+    IFS=,
+    for requirement in $requires; do
+        [ -n "$requirement" ] || continue
+        safe_id "$requirement" || panic "invalid dependency $requirement in $rel"
+        grep -qxF "$requirement" "$SEEN" \
+            || panic "component $name requires missing component $requirement"
+    done
+    IFS="$old_ifs"
+    lower="$LOWER_STORE/$sequence"
+    lowerdirs="$lower${lowerdirs:+:$lowerdirs}"
+    count="$(kv_get "$meta" storage.count 0)"
+    is_uint "$count" || panic "invalid storage count in $rel"
+    index=0
+    while [ "$index" -lt "$count" ]; do
+        prefix="storage.$index"
+        id="$(kv_get "$meta" "$prefix.id" '')"
+        image="$(kv_get "$meta" "$prefix.image" '')"
+        target="$(kv_get "$meta" "$prefix.mount" '')"
+        format="$(kv_get "$meta" "$prefix.format" '')"
+        size="$(kv_get "$meta" "$prefix.initial_size_mib" '')"
+        growth="$(kv_get "$meta" "$prefix.growth" inherit)"
+        declared="$(kv_get "$meta" "$prefix.redundancy" inherit)"
+        legacy_component="$(kv_get "$meta" "$prefix.legacy_component" '')"
+        safe_id "$id" || panic "invalid volume id in $rel"
+        case "$image" in *.ext4) :;; *) panic "invalid volume image in $rel";; esac
+        case "$target" in /*) :;; *) panic "invalid mount point in $rel";; esac
+        [ "$format" = ext4 ] || panic "unsupported volume filesystem in $rel"
+        redundancy="$(kv_get "$STORAGE_CONF" "override.$name.$id.redundancy" '')"
+        [ -n "$redundancy" ] || [ -z "$legacy_component" ] \
+            || redundancy="$(kv_get "$STORAGE_CONF" "override.$legacy_component.$id.redundancy" '')"
+        redundancy="${redundancy:-$declared}"
+        [ "$redundancy" = inherit ] && redundancy="$DEFAULT_REDUNDANCY"
+        [ -z "$legacy_component" ] || safe_id "$legacy_component" \
+            || panic "invalid legacy volume owner in $rel"
+        result="$(create_volume_device "$name" "$id" "$image" "$size" "$growth" "$redundancy" "$legacy_component")"
+        device="${result%%|*}"; backing="${result#*|}"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$id" "$redundancy" "$device" "$target" "$backing" >> "$VOLUME_PLAN"
+        bind_count="$(kv_get "$meta" "$prefix.bind.count" 0)"
+        bind_index=0
+        while [ "$bind_index" -lt "$bind_count" ]; do
+            bind_prefix="$prefix.bind.$bind_index"
+            source="$(kv_get "$meta" "$bind_prefix.source" '')"
+            bind_target="$(kv_get "$meta" "$bind_prefix.target" '')"
+            seed="$(kv_get "$meta" "$bind_prefix.seed" empty)"
+            condition="$(kv_get "$meta" "$bind_prefix.when" always)"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$id" "$source" "$bind_target" "$seed" "$condition" >> "$BIND_PLAN"
+            bind_index=$((bind_index + 1))
+        done
+        index=$((index + 1))
+    done
+done < "$SORTED"
+
+[ "$core_seen" = yes ] || panic "system-core component is missing"
+[ -n "$lowerdirs" ] || panic "no component roots"
+
+mkdir -p "$OVERLAY_STORE/upper" "$OVERLAY_STORE/work" "$NEWROOT"
+mount -t overlay overlay \
+    -o "lowerdir=$lowerdirs,upperdir=$OVERLAY_STORE/upper,workdir=$OVERLAY_STORE/work" \
+    "$NEWROOT" || panic "cannot assemble component root"
+
+while IFS="$(printf '\t')" read -r component id redundancy device target backing; do
+    [ -n "$id" ] || continue
+    destination="$NEWROOT$target"
+    mkdir -p "$destination"
+    mount -t ext4 -o rw,noatime,errors=remount-ro,nodev "$device" "$destination" \
+        || panic "cannot mount $component/$id at $target"
+done < "$VOLUME_PLAN"
+
+while IFS="$(printf '\t')" read -r component id source target seed condition; do
+    [ -n "$id" ] || continue
+    [ "$condition" != logging-persistent ] || [ "$LOG_MODE" = persistent ] || continue
+    volume_mount="$(awk -F '\t' -v component="$component" -v id="$id" '$1 == component && $2 == id {print $5; exit}' "$VOLUME_PLAN")"
+    [ -n "$volume_mount" ] || panic "bind source volume $component/$id is not mounted"
+    source_path="$NEWROOT$volume_mount/$source"
+    target_path="$NEWROOT$target"
+    if [ "$seed" = overlay ]; then
+        mkdir -p "$source_path/upper" "$source_path/work" "$target_path"
+        mount -t overlay overlay \
+            -o "lowerdir=$target_path,upperdir=$source_path/upper,workdir=$source_path/work" \
+            "$target_path" || panic "cannot mount persistent overlay $source on $target"
+        printf '%s\t%s\toverlay\n' "$component" "$target" >> "$APPLIED_BINDS"
+        continue
+    fi
+    first=no
+    if [ ! -d "$source_path" ]; then
+        mkdir -p "$source_path"
+        first=yes
+    fi
+    mkdir -p "$target_path"
+    if [ "$first" = yes ] && [ "$seed" = copy ]; then
+        cp -a "$target_path/." "$source_path/" 2>/dev/null || true
+    fi
+    mount --bind "$source_path" "$target_path" || panic "cannot bind $source to $target"
+    printf '%s\t%s\tbind\n' "$component" "$target" >> "$APPLIED_BINDS"
+done < "$BIND_PLAN"
+
+if [ "$LOG_MODE" = volatile ]; then
+    mkdir -p "$NEWROOT/var/log"
+    mount -t tmpfs -o mode=0750,size=64M tmpfs "$NEWROOT/var/log" \
+        || panic "cannot create volatile log filesystem"
+    printf 'system-core\t/var/log\ttmpfs\n' >> "$APPLIED_BINDS"
+fi
+mkdir -p "$NEWROOT/var/log/boot"
+boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf unknown)"
+[ "$LOG_EARLY_BOOT" = yes ] && cp "$EARLY_LOG" "$NEWROOT/var/log/boot/${boot_id}-early.log" 2>/dev/null || true
+[ "$LOG_KERNEL" = yes ] && dmesg > "$NEWROOT/var/log/boot/${boot_id}-dmesg.log" 2>/dev/null || true
+if [ "$LOG_OPERATION" = yes ]; then
+    operation_log="$NEWROOT/var/log/boot/${boot_id}-operations.log"
+    : > "$operation_log"
+    for record in /run/strataos/*.log; do
+        [ -f "$record" ] || continue
+        [ "$record" = "$EARLY_LOG" ] && continue
+        printf '===== %s =====\n' "${record##*/}" >> "$operation_log"
+        cat "$record" >> "$operation_log" 2>/dev/null || true
+        printf '\n' >> "$operation_log"
+    done
+    [ -s "$operation_log" ] || rm -f "$operation_log"
+fi
+if [ -d "$PSTORE" ]; then
+    for record in "$PSTORE"/*; do
+        [ -f "$record" ] || continue
+        cp "$record" "$NEWROOT/var/log/boot/${boot_id}-pstore-${record##*/}" 2>/dev/null || true
+    done
+fi
+cp "$VOLUME_PLAN" /run/strataos/volumes.tsv
+printf '%s\n' "$ACTIVE" > /run/strataos/active-slot
+printf '%s\n' "$BASE" > /run/strataos/base.path
+
+log "switching to StrataOS userspace"
+mkdir -p "$NEWROOT/proc" "$NEWROOT/sys" "$NEWROOT/dev" "$NEWROOT/run"
+sync
+# The pstore filesystem, if mounted under /sys, can interfere with mount --move.
+umount /sys/fs/pstore 2>/dev/null || true
+log "moving kernel filesystems to new root"
+mount --move /proc "$NEWROOT/proc"
+log "moved /proc"
+mount --move /sys "$NEWROOT/sys"
+log "moved /sys"
+mount --move /dev "$NEWROOT/dev"
+log "moved /dev"
+mount --move /run "$NEWROOT/run"
+log "moved /run; executing switch_root"
+exec switch_root "$NEWROOT" /sbin/init

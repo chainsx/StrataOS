@@ -1,0 +1,19 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+inventory=/run/strataos/components.seen
+has_component() { [ -r "$inventory" ] && grep -qxF "$1" "$inventory"; }
+
+docker=false
+webapp=false
+firewall=false
+storage=false
+has_component webui-docker && docker=true
+has_component webui-firewall && firewall=true
+has_component webui-storage && storage=true
+if has_component webui-flatpak; then
+    webapp=true
+fi
+printf '{"docker":%s,"webapp":%s,"firewall":%s,"storage":%s}\n' "$docker" "$webapp" "$firewall" "$storage"

@@ -1,0 +1,38 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+escape() { printf '%s' "$1" | json_escape; }
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+    name=$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || echo "strataos")
+    printf '{"hostname":"%s"}\n' "$(escape "$name")"
+    exit 0
+fi
+
+[ "${REQUEST_METHOD:-GET}" = POST ] || { printf '{"error":"method not allowed"}\n'; exit 0; }
+length=${CONTENT_LENGTH:-0}
+case "$length" in ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0;; esac
+[ "$length" -le 1024 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+body=$(dd bs=1 count="$length" 2>/dev/null)
+
+new_hostname=$(printf '%s' "$body" | sed -n 's/.*"hostname"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+
+if [ -z "$new_hostname" ]; then
+    printf '{"error":"hostname required"}\n'; exit 0
+fi
+
+case "$new_hostname" in
+    ''|*[!A-Za-z0-9._-]*|*.|.-*) printf '{"error":"invalid hostname"}\n'; exit 0 ;;
+esac
+[ "${#new_hostname}" -le 63 ] || { printf '{"error":"hostname too long (max 63 chars)"}\n'; exit 0; }
+
+hostname "$new_hostname" 2>/dev/null || true
+printf '%s\n' "$new_hostname" > /etc/hostname 2>/dev/null || { printf '{"error":"failed to write /etc/hostname"}\n'; exit 0; }
+
+if grep -q "^127.0.1.1[[:space:]]" /etc/hosts 2>/dev/null; then
+    sed -i "s/^127.0.1.1[[:space:]].*/127.0.1.1\\t$new_hostname/" /etc/hosts 2>/dev/null || true
+fi
+
+printf '{"success":true,"hostname":"%s"}\n' "$(escape "$new_hostname")"

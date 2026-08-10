@@ -1,0 +1,103 @@
+#!/sbin/openrc-run
+
+name="Docker Engine"
+description="Docker container runtime"
+command="/usr/bin/dockerd"
+command_args="${DOCKER_OPTS:---config-file=/etc/docker/daemon.json} --pidfile=/run/dockerd.pid"
+supervisor=supervise-daemon
+pidfile="/run/openrc/docker-supervise.pid"
+output_log="/var/log/docker.log"
+error_log="/var/log/docker.log"
+
+depend() {
+    need localmount strataos-storage
+    use net logger
+    after strataos-network strataos-logging
+}
+
+start_pre() {
+    for pidfile in /run/dockerd.pid /run/openrc/docker-supervise.pid; do
+        if [ -f "$pidfile" ]; then
+            pid="$(cat "$pidfile" 2>/dev/null || true)"
+            if [ -n "$pid" ]; then
+                kill "$pid" 2>/dev/null || true
+                sleep 1
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+            rm -f "$pidfile"
+        fi
+    done
+    rm -f /var/run/docker.sock /run/docker.sock
+    killall -9 dockerd 2>/dev/null || true
+    killall -9 containerd 2>/dev/null || true
+    sleep 1
+    rm -f /run/dockerd.pid
+    checkpath --directory --mode 0711 /var/lib/docker
+    checkpath --directory --mode 0755 /run/docker
+    checkpath --file --mode 0640 /var/log/docker.log
+}
+
+start_post() {
+    local i=0
+    while [ $i -lt 120 ]; do
+        if [ -S /var/run/docker.sock ]; then
+            eend 0
+            return 0
+        fi
+        if [ -f /run/dockerd.pid ]; then
+            local pid
+            pid="$(cat /run/dockerd.pid 2>/dev/null || true)"
+            if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+                eend 1 "Docker daemon exited prematurely"
+                eerror "Last 20 lines of Docker log:"
+                tail -20 /var/log/docker.log 2>/dev/null | while IFS= read -r line; do
+                    eerror "  $line"
+                done
+                return 1
+            fi
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    if [ -f /run/dockerd.pid ]; then
+        local pid
+        pid="$(cat /run/dockerd.pid 2>/dev/null || true)"
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+            sleep 1
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+        rm -f /run/dockerd.pid
+    fi
+    eend 1 "Docker daemon did not create socket after 120s"
+    eerror "Last 20 lines of Docker log:"
+    tail -20 /var/log/docker.log 2>/dev/null | while IFS= read -r line; do
+        eerror "  $line"
+    done
+    return 1
+}
+
+stop() {
+    ebegin "Stopping Docker containers and daemon"
+    if [ -S /var/run/docker.sock ]; then
+        containers=$(docker ps -q 2>/dev/null) || true
+        if [ -n "$containers" ]; then
+            docker stop $containers 2>/dev/null || true
+            sleep 2
+        fi
+    fi
+    supervise-daemon --stop --pidfile /run/openrc/docker-supervise.pid 2>/dev/null || true
+    sleep 1
+    # Force-kill any remaining Docker/containerd processes
+    killall -TERM dockerd 2>/dev/null || true
+    killall -TERM containerd 2>/dev/null || true
+    sleep 1
+    killall -KILL dockerd 2>/dev/null || true
+    killall -KILL containerd 2>/dev/null || true
+    eend 0
+}
+
+stop_post() {
+    rm -f /run/dockerd.pid /run/openrc/docker-supervise.pid /var/run/docker.sock
+    sync
+}

@@ -1,0 +1,8 @@
+name = "llvm-prebuilt"
+version = "22.1.8"
+
+[source.x86_64]
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-{version}/LLVM-{version}-Linux-X64.tar.xz"
+
+[source.arm64]
+url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-{version}/LLVM-{version}-Linux-ARM64.tar.xz"

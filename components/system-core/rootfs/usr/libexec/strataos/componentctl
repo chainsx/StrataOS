@@ -1,0 +1,300 @@
+#!/bin/sh
+set -eu
+
+DATA_MOUNT="$(cat /run/strataos/data.mount 2>/dev/null || printf '%s' /run/strata-data)"
+BASE="$(cat /run/strataos/base.path 2>/dev/null || printf '%s' "$DATA_MOUNT/strataos")"
+SLOTS="$BASE/slots"
+ACTIVE="$BASE/active-slot"
+COMPONENTS="$BASE/components"
+LOCK=/run/lock/strataos-componentctl.lock
+VOLUMES=/run/strataos/volumes.tsv
+
+usage() {
+    cat <<USAGE
+Usage: componentctl COMMAND
+  list [--volumes]             list active components and mounted volumes
+  verify                       verify active component hashes
+  install FILE.squashfs        stage a component in a new boot slot
+  rollback                     select the previous boot slot
+  active-manifest              print the active slot identifier
+  commit-boot                  record a successful boot
+  verify-mounts                verify declared volume mount points
+  storage-status               show volume topology and allocated sizes
+USAGE
+}
+
+need_data() {
+    [ -d "$BASE" ] || { echo "StrataOS data partition is not mounted" >&2; exit 1; }
+}
+
+active_slot() {
+    [ -s "$ACTIVE" ] || { echo "missing active-slot" >&2; exit 1; }
+    slot="$(cat "$ACTIVE")"
+    case "$slot" in ''|*/*|*..*|*[!A-Za-z0-9._-]*)
+        echo "invalid active slot: $slot" >&2; exit 1 ;;
+    esac
+    printf '%s\n' "$slot"
+}
+
+active_list() {
+    slot="$(active_slot)"
+    list="$SLOTS/$slot/components.list"
+    [ -s "$list" ] || { echo "missing component list for $slot" >&2; exit 1; }
+    cat "$list"
+}
+
+safe_component_rel() {
+    rel="$1"
+    case "$rel" in components/*.squashfs) : ;; *) return 1 ;; esac
+    leaf="${rel#components/}"
+    case "$leaf" in ''|*/*|*..*|*[!A-Za-z0-9._+-]*) return 1 ;; esac
+}
+
+safe_slot() {
+    case "$1" in ''|*/*|*..*|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac
+}
+
+verify_file() {
+    rel="$1"
+    safe_component_rel "$rel" || { echo "unsafe component path: $rel" >&2; return 1; }
+    file="$BASE/$rel"
+    [ -f "$file" ] || { echo "missing component: $rel" >&2; return 1; }
+    base="${file##*/}"
+    suffix="${base%.squashfs}"
+    suffix="${suffix##*-}"
+    case "$suffix" in ''|*[!0-9a-f]*) echo "invalid hash suffix: $base" >&2; return 1;; esac
+    [ "${#suffix}" -eq 64 ] || { echo "invalid full hash suffix: $base" >&2; return 1; }
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+    [ "$actual" = "$suffix" ] && return 0
+    echo "hash mismatch: $rel" >&2
+    return 1
+}
+
+meta_get() {
+    file="$1" key="$2" default="${3:-}"
+    value="$(awk -F= -v key="$key" '
+        $0 !~ /^[[:space:]]*#/ && $1 == key {
+            sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit
+        }
+    ' "$file")"
+    [ -n "$value" ] && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+component_field_from_rel() (
+    rel="$1"
+    field="$2"
+    default="${3:-}"
+    verify_file "$rel" || exit 1
+    file="$BASE/$rel"
+    mountpoint="$(mktemp -d /run/strata-inspect.XXXXXX)"
+    loop="$(losetup -f --show -r "$file")" || exit 1
+    trap 'umount "$mountpoint" 2>/dev/null || true; losetup -d "$loop" 2>/dev/null || true; rmdir "$mountpoint" 2>/dev/null || true' EXIT HUP INT TERM
+    mount -t squashfs -o ro,nosuid,nodev,noexec "$loop" "$mountpoint" || exit 1
+    meta="$mountpoint/meta/strataos/component.conf"
+    [ -s "$meta" ] || exit 1
+    meta_get "$meta" "$field" "$default"
+)
+
+component_name_from_rel() {
+    name="$(component_field_from_rel "$1" name '')" || return 1
+    case "$name" in ''|*[!a-z0-9-]*) return 1;; esac
+    printf '%s\n' "$name"
+}
+
+with_lock() {
+    mkdir -p /run/lock
+    mkdir "$LOCK" 2>/dev/null || { echo "another component operation is active" >&2; exit 1; }
+    trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+}
+
+install_component() {
+    source_file="$1"
+    need_data
+    [ -f "$source_file" ] || { echo "not a file: $source_file" >&2; exit 1; }
+    with_lock
+    mountpoint="$(mktemp -d /run/strata-component.XXXXXX)"
+    loop="$(losetup -f --show -r "$source_file")"
+    trap 'umount "$mountpoint" 2>/dev/null || true; losetup -d "$loop" 2>/dev/null || true; rmdir "$mountpoint" 2>/dev/null || true; rmdir "$LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+    mount -t squashfs -o ro,nosuid,nodev,noexec "$loop" "$mountpoint"
+    meta="$mountpoint/meta/strataos/component.conf"
+    [ -s "$meta" ] && [ -d "$mountpoint/rootfs" ] || { echo "invalid component layout" >&2; exit 1; }
+    [ "$(meta_get "$meta" format 0)" = 1 ] || { echo "unsupported component format" >&2; exit 1; }
+    name="$(meta_get "$meta" name '')"
+    version="$(meta_get "$meta" version '')"
+    architectures="$(meta_get "$meta" architectures '')"
+    priority="$(meta_get "$meta" priority '')"
+    storage_count="$(meta_get "$meta" storage.count 0)"
+    case "$name" in ''|*[!a-z0-9-]*) echo "invalid component name" >&2; exit 1;; esac
+    case "$version" in ''|*[!A-Za-z0-9._+-]*) echo "invalid component version" >&2; exit 1;; esac
+    case "$priority" in ''|*[!0-9]*) echo "invalid component priority" >&2; exit 1;; esac
+    case "$storage_count" in ''|*[!0-9]*) echo "invalid component storage count" >&2; exit 1;; esac
+    machine="$(uname -m)"
+    [ "$machine" != aarch64 ] || machine=arm64
+    [ "$architectures" = "$machine" ] \
+        || { echo "component $name must target exactly architecture $machine" >&2; exit 1; }
+
+    requires="$(meta_get "$meta" requires '')"
+    old_ifs="$IFS"
+    IFS=,
+    for requirement in $requires; do
+        [ -n "$requirement" ] || continue
+        case "$requirement" in *[!a-z0-9-]*) echo "invalid component dependency: $requirement" >&2; exit 1;; esac
+    done
+    IFS="$old_ifs"
+
+    old="$(active_slot)"
+    old_list="$SLOTS/$old/components.list"
+    [ -s "$old_list" ] || { echo "missing component list for $old" >&2; exit 1; }
+    names_file="/run/strata-install-names.$$"
+    : > "$names_file"
+    trap 'umount "$mountpoint" 2>/dev/null || true; losetup -d "$loop" 2>/dev/null || true; rmdir "$mountpoint" 2>/dev/null || true; rm -f "$names_file"; rmdir "$LOCK" 2>/dev/null || true' EXIT HUP INT TERM
+    while IFS= read -r rel || [ -n "$rel" ]; do
+        case "$rel" in ''|'#'*) continue ;; esac
+        existing_name="$(component_name_from_rel "$rel")" \
+            || { echo "cannot inspect active component: $rel" >&2; exit 1; }
+        existing_priority="$(component_field_from_rel "$rel" priority '')" \
+            || { echo "cannot inspect priority for active component: $rel" >&2; exit 1; }
+        case "$existing_priority" in ''|*[!0-9]*) echo "invalid active priority in $rel" >&2; exit 1;; esac
+        if [ "$existing_name" != "$name" ] && [ "$existing_priority" = "$priority" ]; then
+            echo "component priority $priority is already used by $existing_name" >&2
+            exit 1
+        fi
+        printf '%s\n' "$existing_name" >> "$names_file"
+    done < "$old_list"
+    grep -qxF "$name" "$names_file" || printf '%s\n' "$name" >> "$names_file"
+    old_ifs="$IFS"
+    IFS=,
+    for requirement in $requires; do
+        [ -n "$requirement" ] || continue
+        grep -qxF "$requirement" "$names_file" \
+            || { echo "component $name requires missing component $requirement" >&2; exit 1; }
+    done
+    IFS="$old_ifs"
+
+    digest="$(sha256sum "$source_file" | awk '{print $1}')"
+    dest="components/${name}-${version}-${digest}.squashfs"
+    mkdir -p "$COMPONENTS" "$SLOTS"
+    install -m 0644 "$source_file" "$BASE/$dest.partial.$$"
+    sync "$BASE/$dest.partial.$$" 2>/dev/null || sync
+    mv "$BASE/$dest.partial.$$" "$BASE/$dest"
+
+    new="slot-$(date +%s)-$$"
+    mkdir "$SLOTS/$new"
+    new_list="$SLOTS/$new/components.list"
+    : > "$new_list"
+    replaced=no
+    while IFS= read -r rel || [ -n "$rel" ]; do
+        case "$rel" in
+            ''|'#'*) printf '%s\n' "$rel" >> "$new_list"; continue ;;
+        esac
+        existing_name="$(component_name_from_rel "$rel")" \
+            || { echo "cannot inspect active component: $rel" >&2; exit 1; }
+        if [ "$existing_name" = "$name" ]; then
+            if [ "$replaced" = no ]; then
+                printf '%s\n' "$dest" >> "$new_list"
+                replaced=yes
+            fi
+        else
+            printf '%s\n' "$rel" >> "$new_list"
+        fi
+    done < "$old_list"
+    [ "$replaced" = yes ] || printf '%s\n' "$dest" >> "$new_list"
+    printf '%s\n' "$old" > "$SLOTS/$new/previous"
+    printf '%s\n' "$new" > "$ACTIVE.partial.$$"
+    sync
+    mv "$ACTIVE.partial.$$" "$ACTIVE"
+    sync
+    echo "installed $dest; reboot to activate $new"
+}
+
+rollback() {
+    need_data
+    with_lock
+    current="$(active_slot)"
+    previous_file="$SLOTS/$current/previous"
+    [ -s "$previous_file" ] || { echo "no previous slot" >&2; exit 1; }
+    previous="$(cat "$previous_file")"
+    safe_slot "$previous" || { echo "invalid previous slot: $previous" >&2; exit 1; }
+    [ -s "$SLOTS/$previous/components.list" ] || { echo "invalid previous slot: $previous" >&2; exit 1; }
+    printf '%s\n' "$previous" > "$ACTIVE.partial.$$"
+    mv "$ACTIVE.partial.$$" "$ACTIVE"
+    sync
+    echo "selected $previous; reboot required"
+}
+
+list_all() {
+    need_data
+    active_list
+    if [ "${1:-}" = --volumes ]; then
+        printf '\n%-16s %-18s %-18s %-s\n' COMPONENT VOLUME MODE MOUNT
+        if [ -s "$VOLUMES" ]; then
+            awk -F '\t' '{printf "%-16s %-18s %-18s %s\n", $1, $2, $3, $5}' "$VOLUMES"
+        fi
+    fi
+}
+
+verify_mounts() {
+    [ -s "$VOLUMES" ] || { echo "volume inventory is missing" >&2; exit 1; }
+    failed=0
+    while IFS="$(printf '\t')" read -r component id mode device mountpoint backing; do
+        [ -n "$id" ] || continue
+        if ! mountpoint -q "$mountpoint" >/dev/null 2>&1; then
+            echo "unmounted volume: $component/$id -> $mountpoint" >&2
+            failed=1
+        fi
+    done < "$VOLUMES"
+    exit "$failed"
+}
+
+storage_status() {
+    if [ -s "$VOLUMES" ]; then
+        column -t -s "$(printf '\t')" "$VOLUMES" 2>/dev/null || cat "$VOLUMES"
+    else
+        echo "no mounted volume inventory"
+    fi
+    find "$BASE/volumes" -type f \( -name '*.ext4' -o -name '*.raid' -o -name '*.integrity' \) \
+        -exec du -h {} \; 2>/dev/null || true
+    [ -r /proc/mdstat ] && cat /proc/mdstat
+    for md_dir in /sys/block/md*/md; do
+        [ -d "$md_dir" ] || continue
+        printf '%s sync_action=%s mismatch_cnt=%s\n' \
+            "${md_dir%/md}" \
+            "$(cat "$md_dir/sync_action" 2>/dev/null || printf unknown)" \
+            "$(cat "$md_dir/mismatch_cnt" 2>/dev/null || printf unknown)"
+    done
+}
+
+commit_boot() {
+    need_data
+    slot="$(active_slot)"
+    mkdir -p "$BASE/state/boot"
+    printf 'slot=%s\nkernel=%s\ntime=%s\n' "$slot" "$(uname -r)" "$(date -u +%FT%TZ)" \
+        > "$BASE/state/boot/last-success.partial.$$"
+    mv "$BASE/state/boot/last-success.partial.$$" "$BASE/state/boot/last-success"
+    sync
+}
+
+verify_active() {
+    need_data
+    slot="$(active_slot)"
+    list="$SLOTS/$slot/components.list"
+    [ -s "$list" ] || { echo "missing component list for $slot" >&2; return 1; }
+    failed=0
+    while IFS= read -r rel || [ -n "$rel" ]; do
+        case "$rel" in ''|'#'*) continue ;; esac
+        verify_file "$rel" || failed=1
+    done < "$list"
+    return "$failed"
+}
+
+case "${1:-}" in
+    list) shift; list_all "${1:-}" ;;
+    verify) verify_active ;;
+    install) [ "$#" -eq 2 ] || { usage; exit 2; }; install_component "$2" ;;
+    rollback) rollback ;;
+    active-manifest) active_slot ;;
+    commit-boot) commit_boot ;;
+    verify-mounts) verify_mounts ;;
+    storage-status) storage_status ;;
+    *) usage; exit 2 ;;
+esac

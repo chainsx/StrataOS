@@ -1,0 +1,28 @@
+--- a/udev.c
++++ b/udev.c
+@@ -26,7 +26,6 @@
+ #include	<signal.h>
+ #include	<limits.h>
+ #include	<syslog.h>
+-#include	<libudev.h>
+ 
+ static char *unblock_path;
+ 
+@@ -53,6 +52,7 @@
+ 
+ #ifndef NO_LIBUDEV
+ 
++#include	<libudev.h>
+ static struct udev *udev;
+ static struct udev_monitor *udev_monitor;
+ 
+--- a/util.c
++++ b/util.c
+@@ -24,6 +24,7 @@
+ 
+ #include	"mdadm.h"
+ #include	"md_p.h"
++#include	<limits.h>
+ #include	<sys/socket.h>
+ #include	<sys/utsname.h>
+ #include	<sys/wait.h>

@@ -1,0 +1,9 @@
+name = "glib"
+version = "2.84.3"
+kind = "target"
+build_system = "meson"
+dependencies = ["libffi", "pcre2", "zlib"]
+configure_args = ["-Ddefault_library=shared", "-Dtests=false", "-Dinstalled_tests=false", "-Dselinux=disabled", "-Dlibmount=disabled", "-Dxattr=false", "-Dman-pages=disabled", "-Ddtrace=disabled", "-Dsystemtap=disabled", "-Dgtk_doc=false"]
+
+[source]
+url = "https://download.gnome.org/sources/glib/2.84/glib-{version}.tar.xz"

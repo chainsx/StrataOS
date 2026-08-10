@@ -1,0 +1,133 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+set -eu
+
+state_dir=${STRATA_DOCKER_PULL_STATE_DIR:-/run/strata-webui/docker-pull}
+pidfile=$state_dir/pid
+statefile=$state_dir/state
+imagefile=$state_dir/image
+logfile=$state_dir/docker.log
+errorfile=$state_dir/error
+
+valid_image() {
+    case "$1" in ''|-*|*[!A-Za-z0-9_.:@/+-]*) return 1 ;; *) return 0 ;; esac
+}
+
+write_state() {
+    printf '%s\n' "$1" > "$statefile.tmp"
+    mv "$statefile.tmp" "$statefile"
+}
+
+running() {
+    [ -s "$pidfile" ] && kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null
+}
+
+progress() {
+    [ -s "$logfile" ] || { printf '0\t0/0\n'; return; }
+    tr '\033\r' '\n\n' < "$logfile" | awk '
+        function bytes(value, unit, number) {
+            gsub(/[,[:space:]]/, "", value)
+            number = value + 0
+            unit = value
+            sub(/^[0-9.]+/, "", unit)
+            if (unit == "kB" || unit == "KB") number *= 1024
+            else if (unit == "MB") number *= 1024 * 1024
+            else if (unit == "GB") number *= 1024 * 1024 * 1024
+            else if (unit == "TB") number *= 1024 * 1024 * 1024 * 1024
+            return number
+        }
+        {
+            id = $1
+            sub(/:$/, "", id)
+            if (id !~ /^[0-9a-f]+$/ || length(id) < 4) next
+            $1 = ""
+            sub(/^[[:space:]]+/, "", $0)
+            status[id] = $0
+        }
+        END {
+            total = 0
+            complete = 0
+            sum = 0
+            for (id in status) {
+                total++
+                line = status[id]
+                percent = 0
+                if (line ~ /(Pull complete|Already exists)/) {
+                    percent = 100
+                    complete++
+                } else if (line ~ /(Download complete|Verifying Checksum)/) {
+                    percent = 80
+                } else if (line ~ /Downloading|Extracting/) {
+                    ratio = ""
+                    count = split(line, fields, /[[:space:]]+/)
+                    for (i = 1; i <= count; i++) if (fields[i] ~ /^[0-9.,]+[kKMGT]*B\/[0-9.,]+[kKMGT]*B$/) ratio = fields[i]
+                    if (ratio != "") {
+                        split(ratio, values, "/")
+                        current = bytes(values[1])
+                        maximum = bytes(values[2])
+                        if (maximum > 0) {
+                            fraction = current / maximum
+                            if (fraction > 1) fraction = 1
+                            if (line ~ /Extracting/) percent = 80 + fraction * 20
+                            else percent = fraction * 80
+                        }
+                    }
+                }
+                sum += percent
+            }
+            overall = total ? int(sum / total) : 0
+            printf "%d\t%d/%d\n", overall, complete, total
+        }
+    '
+}
+
+mkdir -p "$state_dir"
+case "${1:-}" in
+    start)
+        image=${2:-}
+        valid_image "$image" || { echo "invalid image reference" >&2; exit 2; }
+        command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || {
+            echo "Docker daemon is unavailable" >&2; exit 3;
+        }
+        if running; then
+            echo "another Docker image pull is already running" >&2
+            exit 4
+        fi
+        rm -f "$pidfile" "$logfile" "$errorfile"
+        printf '%s\n' "$image" > "$imagefile"
+        write_state starting
+        /usr/bin/setsid "$0" worker "$image" </dev/null >/dev/null 2>&1 &
+        printf '%s\n' "$!" > "$pidfile"
+        ;;
+    worker)
+        image=${2:-}
+        valid_image "$image" || exit 2
+        write_state running
+        if /usr/bin/script -q -e -c "docker pull $image" "$logfile" >/dev/null 2>&1; then
+            write_state done
+        else
+            tr '\033\r' '\n\n' < "$logfile" 2>/dev/null | sed '/^[[:space:]]*$/d' | tail -n 1 > "$errorfile" || true
+            write_state error
+        fi
+        rm -f "$pidfile"
+        ;;
+    status)
+        state=$(cat "$statefile" 2>/dev/null || printf idle)
+        image=$(cat "$imagefile" 2>/dev/null || true)
+        message=$(cat "$errorfile" 2>/dev/null || true)
+        if running; then state=running; fi
+        result=$(progress)
+        old_ifs=$IFS
+        IFS="$(printf '\t')"
+        set -- $result
+        IFS=$old_ifs
+        percent=${1:-0}
+        part=${2:-0/0}
+        if [ "$state" = done ]; then
+            percent=100
+            case "$part" in 0/0) part=1/1 ;; */*) part=${part#*/}/${part#*/} ;; esac
+        fi
+        printf '%s\t%s\t%s\t%s\t%s\n' "$state" "$percent" "$image" "$part" "$message"
+        ;;
+    *) echo "usage: web-docker-pull {start IMAGE|status}" >&2; exit 2 ;;
+esac

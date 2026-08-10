@@ -1,0 +1,9 @@
+name = "wayvnc"
+version = "0.10.1"
+kind = "target"
+build_system = "meson"
+dependencies = ["aml", "jansson", "libdrm", "libxkbcommon", "neatvnc", "pixman", "wayland", "wayland-protocols"]
+configure_args = ["-Dscreencopy-dmabuf=enabled", "-Dpam=disabled", "-Dman-pages=disabled", "-Dtests=false"]
+
+[source]
+url = "https://github.com/any1/wayvnc/archive/refs/tags/v{version}.tar.gz"

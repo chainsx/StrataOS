@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+description="Validate local mounts prepared by initramfs"
+depend() { need devfs procfs sysfs mdev; }
+start() {
+    mountpoint -q / || return 1
+    mkdir -p /run /tmp /var/tmp
+    chmod 1777 /tmp /var/tmp
+}
+
+stop() {
+    # The running root overlay and component SquashFS files are backed by
+    # /run/strata-data. They cannot be unmounted until after switch_root.
+    # Flush them here and let the reboot transition tear down the namespace,
+    # instead of OpenRC's generic stop path reporting false remount failures.
+    ebegin "Synchronizing StrataOS filesystems"
+    sync
+    eend 0
+}

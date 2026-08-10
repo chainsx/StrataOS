@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+state_dir=/root/.local/state/strataos
+password_marker="$state_dir/root-password-changed"
+complete_marker="$state_dir/initial-setup-complete"
+
+mkdir -p "$state_dir"
+chmod 0700 "$state_dir"
+
+# Older releases kept /etc/shadow in the volatile root overlay while the
+# completion marker below was persistent. Detect that migration case and run
+# setup again after the persistent account database has been seeded.
+root_hash=$(awk -F: '$1 == "root" {print $2; exit}' /etc/shadow)
+case "$root_hash" in
+    '$6$strataos$'*) rm -f "$password_marker" "$complete_marker" ;;
+esac
+
+[ -e "$complete_marker" ] && exit 0
+
+printf '\nStrataOS initial setup\n'
+if [ ! -e "$password_marker" ]; then
+    printf 'The default root password must be changed before continuing.\n'
+    before_hash=$(awk -F: '$1 == "root" {print $2; exit}' /etc/shadow)
+    while :; do
+        if /usr/bin/passwd root; then
+            after_hash=$(awk -F: '$1 == "root" {print $2; exit}' /etc/shadow)
+            [ -n "$after_hash" ] && [ "$after_hash" != "$before_hash" ] && break
+        fi
+        printf 'Password change failed; please try again.\n' >&2
+    done
+    : > "$password_marker"
+    chmod 0600 "$password_marker"
+fi
+
+while :; do
+    printf 'New administrator username: '
+    IFS= read -r username || exit 1
+    case "$username" in
+        ""|[!a-z_]*|*[!a-z0-9_-]*)
+            printf 'Use a lowercase name beginning with a letter or underscore.\n' >&2
+            continue
+            ;;
+    esac
+    if /usr/bin/id "$username" >/dev/null 2>&1; then
+        printf 'User %s already exists.\n' "$username" >&2
+        continue
+    fi
+    if /usr/sbin/useradd -m -U -s /bin/zsh \
+        -G wheel,audio,video,input,docker,flatpak,netdev "$username"; then
+        break
+    fi
+    printf 'Unable to create user %s; choose another name.\n' "$username" >&2
+done
+
+printf 'Set the password for %s.\n' "$username"
+until /usr/bin/passwd "$username"; do
+    printf 'Password setup failed; please try again.\n' >&2
+done
+
+: > "$complete_marker"
+chmod 0600 "$complete_marker"
+printf 'Initial setup complete. Administrator %s is ready.\n\n' "$username"

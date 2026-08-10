@@ -1,0 +1,9 @@
+name = "libseccomp"
+version = "2.6.0"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--disable-static", "--enable-shared", "--disable-python"]
+
+[source]
+url = "https://github.com/seccomp/libseccomp/releases/download/v{version}/libseccomp-{version}.tar.gz"

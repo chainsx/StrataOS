@@ -1,0 +1,32 @@
+#!/sbin/openrc-run
+
+description="Ban hosts that repeatedly fail authentication"
+description_reload="Reload Fail2ban configuration without dropping bans"
+extra_started_commands="reload"
+
+command=/usr/bin/fail2ban-server
+pidfile=/run/fail2ban/fail2ban.pid
+socket=/run/fail2ban/fail2ban.sock
+command_args="-x -p ${pidfile} -s ${socket}"
+retry="TERM/30/KILL/5"
+
+depend() {
+    need localmount strataos-logging
+    use firewall
+    after strataos-firewall sshd
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /run/fail2ban /var/lib/fail2ban
+    if [ ! -e /var/lib/fail2ban/fail2ban.sqlite3 ] && [ -e /state/fail2ban/fail2ban.sqlite3 ]; then
+        ewarn "Migrating the legacy Fail2ban database into its component volume"
+        cp -p /state/fail2ban/fail2ban.sqlite3 /var/lib/fail2ban/fail2ban.sqlite3 || return 1
+    fi
+    "$command" -t -p "$pidfile" -s "$socket"
+}
+
+reload() {
+    ebegin "Reloading Fail2ban"
+    /usr/bin/fail2ban-client -p "$pidfile" -s "$socket" reload
+    eend $?
+}

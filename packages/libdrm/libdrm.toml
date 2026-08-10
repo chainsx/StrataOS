@@ -1,0 +1,9 @@
+name = "libdrm"
+version = "2.4.124"
+kind = "target"
+build_system = "meson"
+dependencies = ["libpciaccess"]
+configure_args = ["-Dtests=false", "-Dcairo-tests=disabled", "-Dman-pages=disabled", "-Dvalgrind=disabled", "-Dintel=enabled", "-Dradeon=enabled", "-Damdgpu=enabled", "-Dnouveau=enabled", "-Dvmwgfx=enabled", "-Domap=disabled", "-Dexynos=disabled", "-Dfreedreno=enabled", "-Dtegra=enabled", "-Dvc4=enabled", "-Detnaviv=enabled"]
+
+[source]
+url = "https://dri.freedesktop.org/libdrm/libdrm-{version}.tar.xz"

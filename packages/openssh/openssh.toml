@@ -1,0 +1,9 @@
+name = "openssh"
+version = "10.0p1"
+kind = "target"
+build_system = "autotools"
+dependencies = ["openssl", "zlib"]
+configure_args = ["--sysconfdir=/etc/ssh", "--with-privsep-path=/var/empty", "--with-privsep-user=sshd", "--with-pid-dir=/run", "--without-pam", "--without-selinux", "--without-kerberos5", "--without-libedit", "--disable-strip"]
+
+[source]
+url = "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-{version}.tar.gz"

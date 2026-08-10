@@ -1,0 +1,14 @@
+name = "mesa"
+version = "26.1.6"
+kind = "target"
+build_system = "meson"
+dependencies = ["host-mako", "host-packaging", "host-pycparser", "host-pyyaml", "host-glslang", "expat", "libarchive", "libdrm", "libxml2", "llvm-libs", "wayland", "wayland-protocols", "zlib", "zstd"]
+# Mesa 26 driver selection follows Debian 13 backports strategy.
+# GPU drivers are per-arch via context variables; LLVM enabled for swrast/radeonsi/llvmpipe.
+# gallium-rusticl disabled (no rustc available).
+# libclc is built as part of llvm-libs from the shared LLVM source.
+configure_args = ["-Dplatforms=wayland", "-Dgallium-drivers={mesa_gallium_drivers}", "-Dvulkan-drivers={mesa_vulkan_drivers}", "-Dvideo-codecs=[]", "-Dllvm={mesa_llvm}", "-Dgallium-rusticl=false", "-Degl=enabled", "-Dgbm=enabled", "-Dgles1=disabled", "-Dgles2=enabled", "-Dopengl=true", "-Dglx=disabled", "-Dlibunwind=disabled", "-Dvalgrind=disabled", "-Dbuild-tests=false"]
+
+[source]
+url = "https://gitlab.freedesktop.org/mesa/mesa/-/archive/mesa-{version}/mesa-mesa-{version}.tar.gz"
+sha256 = "2336a3a18ab24ffe1d906a51adde827e5ab565b06ff8446fe8ed44ae81bd0931"

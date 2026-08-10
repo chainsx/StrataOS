@@ -1,0 +1,88 @@
+#!/bin/sh
+# Owned by the webui-flatpak capability component.
+set -eu
+
+app_id=$1
+vnc_port=$2
+runtime=/run/strata-webui/sessions/$app_id/runtime
+export HOME=/var/lib/strataos/webui/home
+export XDG_RUNTIME_DIR=$runtime
+export XDG_DATA_HOME=$HOME/.local/share
+export XDG_CONFIG_HOME=$HOME/.config
+export XDG_CACHE_HOME=$HOME/.cache
+export WLR_BACKENDS=headless
+export WLR_HEADLESS_OUTPUTS=1
+export WLR_RENDERER=gles2
+export WLR_LIBINPUT_NO_DEVICES=1
+export WAYLAND_DISPLAY=wayland-0
+export XKB_CONFIG_ROOT=/usr/share/X11/xkb
+
+mkdir -p "$HOME" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$runtime"
+chmod 0700 "$runtime"
+
+dbus-run-session -- sh -eu -c '
+    start_cage() {
+        mode=$1
+        app=$2
+        case "$mode" in
+            gpu)
+                render_node=
+                for candidate in /dev/dri/renderD*; do
+                    [ -r "$candidate" ] && [ -w "$candidate" ] || continue
+                    render_node=$candidate
+                    break
+                done
+                [ -n "$render_node" ] || return 1
+                export WLR_RENDER_DRM_DEVICE=$render_node
+                export WLR_RENDERER_ALLOW_SOFTWARE=0
+                export LIBGL_ALWAYS_SOFTWARE=0
+                unset GALLIUM_DRIVER
+                cage -- flatpak run --device=dri "$app" &
+                ;;
+            software)
+                unset WLR_RENDER_DRM_DEVICE
+                export WLR_RENDERER_ALLOW_SOFTWARE=1
+                export LIBGL_ALWAYS_SOFTWARE=1
+                export GALLIUM_DRIVER=softpipe
+                cage -- flatpak run --env=LIBGL_ALWAYS_SOFTWARE=1 --env=GALLIUM_DRIVER=softpipe "$app" &
+                ;;
+            *) return 2 ;;
+        esac
+        cage_pid=$!
+        count=0
+        while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; do
+            kill -0 "$cage_pid" 2>/dev/null || return 1
+            count=$((count + 1))
+            [ "$count" -lt 100 ] || return 1
+            sleep 0.1
+        done
+        printf "%s\n" "$mode" > "$XDG_RUNTIME_DIR/render-mode"
+        return 0
+    }
+
+    vnc_pid=
+    cage_pid=
+    if ! start_cage gpu "$1"; then
+        if [ -n "$cage_pid" ]; then
+            kill "$cage_pid" 2>/dev/null || true
+            wait "$cage_pid" 2>/dev/null || true
+        fi
+        cage_pid=
+        start_cage software "$1"
+    fi
+    trap '\''kill "$cage_pid" ${vnc_pid:-} 2>/dev/null || true'\'' EXIT INT TERM
+    # Keep GPU acceleration inside the application and compositor, but use
+    # the standard WayVNC screencopy path. DMABUF capture is not reliable for
+    # every headless/virtio renderer and can otherwise yield an all-black
+    # browser frame even while the application is running.
+    if [ "$(cat "$XDG_RUNTIME_DIR/render-mode")" = gpu ]; then
+        wayvnc --max-fps=60 127.0.0.1 "$2" &
+    else
+        wayvnc --max-fps=30 127.0.0.1 "$2" &
+    fi
+    vnc_pid=$!
+    sleep 0.1
+    kill -0 "$vnc_pid" 2>/dev/null || exit 1
+    : > "$XDG_RUNTIME_DIR/vnc-ready"
+    wait "$cage_pid"
+' sh "$app_id" "$vnc_port"

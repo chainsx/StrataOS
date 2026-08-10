@@ -1,0 +1,12 @@
+name = "docker-static"
+version = "28.3.3"
+kind = "target"
+build_system = "special"
+special = "docker-static"
+dependencies = []
+
+[source.x86_64]
+url = "https://download.docker.com/linux/static/stable/x86_64/docker-{version}.tgz"
+
+[source.arm64]
+url = "https://download.docker.com/linux/static/stable/aarch64/docker-{version}.tgz"

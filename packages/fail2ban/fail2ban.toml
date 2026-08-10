@@ -1,0 +1,10 @@
+name = "fail2ban"
+version = "1.1.0"
+kind = "target"
+build_system = "special"
+special = "fail2ban"
+dependencies = ["python", "nftables"]
+
+[source]
+url = "https://github.com/fail2ban/fail2ban/archive/refs/tags/{version}.tar.gz"
+sha256 = "474fcc25afdaf929c74329d1e4d24420caabeea1ef2e041a267ce19269570bae"

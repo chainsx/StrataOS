@@ -1,0 +1,10 @@
+#!/sbin/openrc-run
+description="Populate /dev with BusyBox mdev"
+depend() { need devfs procfs sysfs; before localmount; }
+start() {
+    if [ -w /proc/sys/kernel/hotplug ]; then
+        echo /sbin/mdev > /proc/sys/kernel/hotplug
+    fi
+    /sbin/mdev -s
+    chmod 0666 /dev/null /dev/zero /dev/full /dev/random /dev/urandom /dev/tty /dev/ptmx
+}

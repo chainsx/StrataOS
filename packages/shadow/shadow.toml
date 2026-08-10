@@ -1,0 +1,9 @@
+name = "shadow"
+version = "4.17.4"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--sysconfdir=/etc", "--without-libpam", "--without-audit", "--without-selinux", "--without-acl", "--without-attr", "--without-btrfs", "--disable-nls", "--disable-man", "--with-libbsd=no"]
+
+[source]
+url = "https://github.com/shadow-maint/shadow/releases/download/{version}/shadow-{version}.tar.xz"

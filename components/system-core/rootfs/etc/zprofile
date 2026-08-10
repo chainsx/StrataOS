@@ -1,0 +1,5 @@
+source /etc/profile
+
+if [[ -o interactive && EUID -eq 0 && -x /usr/libexec/strataos/initial-setup ]]; then
+    /usr/libexec/strataos/initial-setup
+fi

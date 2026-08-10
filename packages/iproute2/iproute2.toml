@@ -1,0 +1,12 @@
+name = "iproute2"
+version = "6.15.0"
+kind = "target"
+build_system = "special"
+special = "iproute2"
+dependencies = ["libmnl"]
+configure_args = ["HAVE_ELF:=n", "HAVE_SELINUX:=n", "HAVE_MNL:=y", "HAVE_BERKELEY_DB:=n", "CONF_COLOR:=COLOR_OPT_NEVER", "CFLAGS += -DHAVE_SETNS -DHAVE_HANDLE_AT -DHAVE_LIBMNL", "LDLIBS += -lmnl"]
+build_args = ["KERNEL_INCLUDE={sysroot}/usr/include"]
+install_args = ["SBINDIR=/sbin", "CONFDIR=/etc/iproute2", "DOCDIR=/usr/share/doc/iproute2"]
+
+[source]
+url = "https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-{version}.tar.xz"

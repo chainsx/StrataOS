@@ -1,0 +1,10 @@
+name = "novnc"
+version = "1.6.0"
+kind = "target"
+build_system = "special"
+special = "novnc"
+dependencies = []
+patches = ["novnc-low-latency.patch"]
+
+[source]
+url = "https://github.com/novnc/noVNC/archive/refs/tags/v{version}.tar.gz"

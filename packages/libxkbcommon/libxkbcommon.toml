@@ -1,0 +1,9 @@
+name = "libxkbcommon"
+version = "1.8.1"
+kind = "target"
+build_system = "meson"
+dependencies = ["libxml2", "wayland", "xkeyboard-config"]
+configure_args = ["-Dxkb-config-root=/usr/share/X11/xkb", "-Denable-tools=false", "-Denable-x11=false", "-Denable-docs=false", "-Denable-wayland=false", "-Denable-xkbregistry=false", "-Denable-bash-completion=false"]
+
+[source]
+url = "https://github.com/xkbcommon/libxkbcommon/archive/refs/tags/xkbcommon-{version}.tar.gz"

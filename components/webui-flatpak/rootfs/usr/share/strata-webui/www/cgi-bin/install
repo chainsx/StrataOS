@@ -1,0 +1,36 @@
+#!/bin/sh
+# Owned by the webui-flatpak capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+case "${REQUEST_METHOD:-GET}" in
+    POST)
+        length=${CONTENT_LENGTH:-0}
+        case "$length" in
+            ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0 ;;
+        esac
+        [ "$length" -le 1024 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+        body=$(dd bs=1 count="$length" 2>/dev/null)
+        ref=$(printf '%s' "$body" | sed -n 's/.*"ref"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+        remote=$(printf '%s' "$body" | sed -n 's/.*"remote"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+        if result=$(/usr/libexec/strataos/web-flatpak-install start "$ref" "$remote" 2>&1); then
+            printf '{"state":"starting","ref":"%s","progress":0,"operation":""}\n' "$(printf '%s' "$ref" | json_escape)"
+        else
+            printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"
+        fi
+        ;;
+    GET)
+        old_ifs=$IFS
+        IFS="$(printf '\t')"
+        read -r state progress ref operation <<EOF
+$(/usr/libexec/strataos/web-flatpak-install status)
+EOF
+        IFS=$old_ifs
+        [ "${operation:--}" != - ] || operation=
+        printf '{"state":"%s","progress":%s,"ref":"%s","operation":"%s"}\n' \
+            "$(printf '%s' "$state" | json_escape)" "${progress:-0}" \
+            "$(printf '%s' "$ref" | json_escape)" "$(printf '%s' "$operation" | json_escape)"
+        ;;
+    *) printf '{"error":"method not allowed"}\n' ;;
+esac

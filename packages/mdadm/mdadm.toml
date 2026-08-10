@@ -1,0 +1,12 @@
+name = "mdadm"
+version = "4.3"
+kind = "target"
+build_system = "special"
+special = "mdadm"
+dependencies = []
+patches = ["mdadm-musl-compat.patch"]
+build_args = ["-DNO_COROSYNC", "-DNO_DLM", "-DNO_LIBUDEV", "-Wno-error", "-Wno-unknown-warning-option", "-D_LARGEFILE64_SOURCE", "-include", "linux/falloc.h", "-include", "libgen.h"]
+install_args = ["BINDIR=/sbin", "UDEVDIR=/usr/lib/udev", "STRIP="]
+
+[source]
+url = "https://www.kernel.org/pub/linux/utils/raid/mdadm/mdadm-{version}.tar.xz"

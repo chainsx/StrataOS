@@ -1,0 +1,10 @@
+name = "host-pyparsing"
+version = "3.1.2"
+kind = "host"
+build_system = "special"
+special = "host-python-module"
+dependencies = ["host-python"]
+
+[source]
+url = "https://github.com/pyparsing/pyparsing/archive/refs/tags/pyparsing_{version}.tar.gz"
+sha256 = "9655507e4583fa20d2b6909ce4bf7fee71a9976ea94c734dd857fa9ae7c9c7dd"

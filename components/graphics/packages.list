@@ -1,0 +1,13 @@
+wayland
+llvm-libs
+wayland-protocols
+pixman
+libdrm
+mesa
+xkeyboard-config
+libxkbcommon
+wlroots
+cage
+aml
+neatvnc
+wayvnc

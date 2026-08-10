@@ -1,0 +1,8 @@
+name = "linux"
+version = "6.18.39"
+kind = "target"
+build_system = "kernel"
+dependencies = []
+
+[source]
+url = "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-{version}.tar.xz"

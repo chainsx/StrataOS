@@ -1,0 +1,131 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+set -eu
+
+sessions=/run/strata-webui/docker-terminals
+
+valid_id() {
+    case "$1" in ''|-*|*[!A-Za-z0-9_.-]*) return 1 ;; *) return 0 ;; esac
+}
+
+running() {
+    directory=$1
+    [ -s "$directory/proxy-pid" ] && [ -s "$directory/ttyd-pid" ] || return 1
+    kill -0 "$(cat "$directory/proxy-pid")" 2>/dev/null && kill -0 "$(cat "$directory/ttyd-pid")" 2>/dev/null || return 1
+    [ ! -s "$directory/tls-pid" ] || kill -0 "$(cat "$directory/tls-pid")" 2>/dev/null
+}
+
+container_shell() {
+    container=$1
+    configured=$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null |
+        sed -n 's/^SHELL=//p' | head -1)
+    case "$configured" in
+        /*)
+            if docker exec "$container" "$configured" -c 'exit 0' >/dev/null 2>&1; then
+                printf '%s\n' "$configured"
+                return
+            fi
+            ;;
+    esac
+    # Prefer the most capable interactive shell actually installed in the
+    # container. Ubuntu/Debian images therefore open bash, while Alpine uses
+    # ash and minimal images retain the POSIX sh fallback.
+    for candidate in /bin/bash /usr/bin/bash /bin/zsh /usr/bin/zsh /bin/ash /bin/sh; do
+        if docker exec "$container" "$candidate" -c 'exit 0' >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+    done
+    return 1
+}
+
+listening() {
+    port_hex=$(printf '%04X' "$1")
+    awk -v port=":$port_hex" '$2 ~ port "$" && $4 == "0A" { found=1 } END { exit !found }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+release() {
+    directory=$1
+    for file in tls-pid proxy-pid ttyd-pid; do
+        [ -s "$directory/$file" ] || continue
+        kill "$(cat "$directory/$file")" 2>/dev/null || true
+    done
+    rm -rf "$directory"
+}
+
+mkdir -p "$sessions"
+case "${1:-}" in
+    start)
+        id=${2:-}
+        valid_id "$id" || { echo "invalid container id" >&2; exit 2; }
+        canonical=$(docker inspect --format '{{.Id}}' "$id" 2>/dev/null) || { echo "container does not exist" >&2; exit 3; }
+        [ "$(docker inspect --format '{{.State.Running}}' "$canonical")" = true ] || { echo "container is not running" >&2; exit 4; }
+        shell=$(container_shell "$canonical") || { echo "container has no supported interactive shell" >&2; exit 4; }
+        directory=$sessions/$canonical
+        if running "$directory"; then cat "$directory/public-port"; exit 0; fi
+        if [ -e "$directory" ]; then
+            stale_port=$(cat "$directory/allocated-port" 2>/dev/null || true)
+            release "$directory"
+            [ -z "$stale_port" ] || rmdir "$sessions/port-$stale_port" 2>/dev/null || true
+        fi
+        mkdir "$directory"
+        public=7690
+        while [ "$public" -le 7789 ]; do
+            backend=$((public + 200))
+            if mkdir "$sessions/port-$public" 2>/dev/null; then break; fi
+            public=$((public + 1))
+        done
+        [ "$public" -le 7789 ] || { rmdir "$directory"; echo "no terminal ports available" >&2; exit 5; }
+        printf '%s\n' "$public" > "$directory/public-port"
+        printf '%s\n' "$public" > "$directory/allocated-port"
+        /usr/bin/ttyd -i 127.0.0.1 -p "$backend" -W -m 1 \
+            -H X-Strata-Authenticated -t disableLeaveAlert=true \
+            /usr/bin/docker exec -it "$canonical" "$shell" \
+            >>/var/log/strata-webui.log 2>&1 &
+        ttyd_pid=$!
+        printf '%s\n' "$ttyd_pid" > "$directory/ttyd-pid"
+        proxy_port=$public
+        proxy_bind=
+        tls_config=/etc/strataos/webui/tls.conf
+        tls_certificate=/etc/strataos/webui/tls.crt
+        tls_private_key=/etc/strataos/webui/tls.key
+        if grep -qx 'enabled=yes' "$tls_config" 2>/dev/null &&
+            [ -s "$tls_certificate" ] && [ -s "$tls_private_key" ]; then
+            proxy_port=$((public + 400))
+            proxy_bind="-i 127.0.0.1"
+        fi
+        /usr/sbin/strata-authproxy -l "$proxy_port" $proxy_bind -b "$backend" \
+            -t /run/strata-webui/auth-sessions >>/var/log/strata-webui.log 2>&1 &
+        proxy_pid=$!
+        printf '%s\n' "$proxy_pid" > "$directory/proxy-pid"
+        if [ "$proxy_port" != "$public" ]; then
+            /usr/sbin/strata-tlsproxy -l "$public" -b "$proxy_port" \
+                -c "$tls_certificate" -k "$tls_private_key" \
+                >>/var/log/strata-webui.log 2>&1 &
+            printf '%s\n' "$!" > "$directory/tls-pid"
+        fi
+        count=0
+        while ! listening "$public"; do
+            if ! running "$directory"; then release "$directory"; rmdir "$sessions/port-$public" 2>/dev/null || true; echo "terminal failed to start" >&2; exit 6; fi
+            count=$((count + 1))
+            if [ "$count" -ge 30 ]; then release "$directory"; rmdir "$sessions/port-$public" 2>/dev/null || true; echo "terminal listener did not become ready" >&2; exit 6; fi
+            sleep 0.1
+        done
+        printf '%s\n' "$public"
+        ;;
+    stop-all)
+        for directory in "$sessions"/*; do
+            [ -d "$directory" ] || continue
+            case "${directory##*/}" in port-*) continue ;; esac
+            port=$(cat "$directory/allocated-port" 2>/dev/null || true)
+            release "$directory"
+            [ -z "$port" ] || rmdir "$sessions/port-$port" 2>/dev/null || true
+        done
+        for lock in "$sessions"/port-*; do
+            [ -d "$lock" ] || continue
+            rmdir "$lock" 2>/dev/null || true
+        done
+        ;;
+    *) echo "usage: web-docker-terminal {start CONTAINER|stop-all}" >&2; exit 2 ;;
+esac

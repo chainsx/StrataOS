@@ -1,0 +1,9 @@
+name = "libxml2"
+version = "2.14.3"
+kind = "target"
+build_system = "cmake"
+dependencies = ["zlib", "xz"]
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DLIBXML2_WITH_PYTHON=OFF", "-DLIBXML2_WITH_TESTS=OFF", "-DLIBXML2_WITH_ICONV=OFF", "-DLIBXML2_WITH_LZMA=ON", "-DLIBXML2_WITH_ZLIB=ON"]
+
+[source]
+url = "https://download.gnome.org/sources/libxml2/2.14/libxml2-{version}.tar.xz"

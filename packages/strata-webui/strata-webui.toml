@@ -1,0 +1,8 @@
+name = "strata-webui"
+version = "0.3.22"
+kind = "target"
+build_system = "local"
+dependencies = ["openssl"]
+build_args = ["./build.sh"]
+test_args = ["./build.sh"]
+install_args = ["./build.sh"]

@@ -1,0 +1,10 @@
+name = "cage"
+version = "0.2.0"
+kind = "target"
+build_system = "meson"
+dependencies = ["libxkbcommon", "wayland", "wayland-protocols", "wlroots"]
+configure_args = ["-Dman-pages=disabled", "-Dwerror=false"]
+patches = ["cage-headless-without-session.patch", "cage-remaximize-on-output-resize.patch"]
+
+[source]
+url = "https://github.com/cage-kiosk/cage/archive/refs/tags/v{version}.tar.gz"

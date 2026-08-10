@@ -1,0 +1,9 @@
+name = "pixman"
+version = "0.44.2"
+kind = "target"
+build_system = "meson"
+dependencies = []
+configure_args = ["-Dtests=disabled", "-Ddemos=disabled", "-Dgtk=disabled", "-Dlibpng=disabled"]
+
+[source]
+url = "https://www.cairographics.org/releases/pixman-{version}.tar.gz"

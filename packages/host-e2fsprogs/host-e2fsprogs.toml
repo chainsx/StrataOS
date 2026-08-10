@@ -1,0 +1,11 @@
+name = "host-e2fsprogs"
+version = "1.47.2"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--enable-elf-shlibs", "--disable-uuidd", "--disable-nls", "--disable-debugfs", "--disable-imager", "--disable-defrag", "--with-udev-rules-dir=no", "--with-crond-dir=no", "--with-systemd-unit-dir=no"]
+cppflags = ["-Wno-unused-command-line-argument"]
+environment = ["LDCONFIG=:"]
+
+[source]
+url = "https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v{version}/e2fsprogs-{version}.tar.xz"

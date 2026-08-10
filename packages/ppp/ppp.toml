@@ -1,0 +1,10 @@
+name = "ppp"
+version = "2.5.3"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--disable-cbcp", "--disable-eaptls", "--disable-mslanman", "--disable-openssl-engine", "--disable-peap", "--disable-systemd", "--enable-ipv6cp", "--enable-microsoft-extensions", "--enable-plugins", "--without-openssl", "--without-pam", "--without-pcap", "--without-srp"]
+
+[source]
+url = "https://download.samba.org/pub/ppp/ppp-{version}.tar.gz"
+sha256 = "ddda28dec8aca99a403ab6070d94ffd2b17d63e9a4c5509158e99e148f572d4f"

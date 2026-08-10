@@ -1,0 +1,18 @@
+#!/sbin/openrc-run
+
+name="OpenSSH server"
+description="StrataOS OpenSSH server"
+command="/usr/sbin/sshd"
+pidfile="/run/sshd.pid"
+
+start_pre() {
+    checkpath --directory --mode 0755 /run/sshd
+    /usr/libexec/strataos/firstboot
+    /usr/sbin/sshd -t
+}
+
+depend() {
+    need localmount strataos-storage
+    use net logger
+    after strataos-network strataos-logging
+}

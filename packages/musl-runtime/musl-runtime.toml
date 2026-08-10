@@ -1,0 +1,6 @@
+name = "musl-runtime"
+version = "1.2.5"
+kind = "target"
+build_system = "special"
+special = "musl-runtime"
+dependencies = []

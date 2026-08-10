@@ -1,0 +1,9 @@
+name = "host-pkgconf"
+version = "2.4.3"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--disable-static", "--enable-shared"]
+
+[source]
+url = "https://distfiles.ariadne.space/pkgconf/pkgconf-{version}.tar.xz"

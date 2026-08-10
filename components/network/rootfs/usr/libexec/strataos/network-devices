@@ -1,0 +1,37 @@
+#!/bin/sh
+# Create persisted layer-2 devices before address protocols are applied.
+apply_one() {
+    config=$1
+    device=$(sed -n 's/^device=//p' "$config")
+    type=$(sed -n 's/^type=//p' "$config")
+    parent=$(sed -n 's/^parent=//p' "$config")
+    ports=$(sed -n 's/^ports=//p' "$config")
+    vlan_id=$(sed -n 's/^vlan_id=//p' "$config")
+    [ -n "$device" ] || return 1
+    if [ ! -e "/sys/class/net/$device" ]; then
+        case "$type" in
+            bridge) ip link add name "$device" type bridge || return 1 ;;
+            vlan) ip link add link "$parent" name "$device" type vlan id "$vlan_id" || return 1 ;;
+            macvlan) ip link add link "$parent" name "$device" type macvlan mode bridge || return 1 ;;
+            dummy) ip link add name "$device" type dummy || return 1 ;;
+            *) return 1 ;;
+        esac
+    fi
+    if [ "$type" = bridge ] && [ -n "$ports" ]; then
+        oldifs=$IFS; IFS=,
+        for port in $ports; do ip link set "$port" master "$device" || { IFS=$oldifs; return 1; }; done
+        IFS=$oldifs
+    fi
+    ip link set "$device" up
+}
+
+if [ "$#" -gt 0 ]; then
+    apply_one "$1"
+else
+    failed=0
+    for config in /etc/strataos/networks.d/*.conf; do
+        [ -f "$config" ] || continue
+        apply_one "$config" || failed=1
+    done
+    exit "$failed"
+fi

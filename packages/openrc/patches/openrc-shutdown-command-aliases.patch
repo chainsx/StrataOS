@@ -1,0 +1,61 @@
+diff --git a/src/openrc-shutdown/openrc-shutdown.c b/src/openrc-shutdown/openrc-shutdown.c
+--- a/src/openrc-shutdown/openrc-shutdown.c
++++ b/src/openrc-shutdown/openrc-shutdown.c
+@@ -195,6 +195,7 @@
+ 	char *state = NULL;
+ 	char *time_arg = NULL;
+ 	FILE *fp;
++	bool command_alias = false;
+ 
+ 	applet = basename_c(argv[0]);
+ 	while ((opt = getopt_long(argc, argv, getoptstring,
+@@ -247,6 +248,30 @@
+ 		case_RC_COMMON_GETOPT
+ 		}
+ 	}
++	if (cmd_count == 0) {
++		if (strcmp(applet, "poweroff") == 0 ||
++		    strcmp(applet, "shutdown") == 0) {
++			do_poweroff = true;
++			xasprintf(&state, "%s", "power off");
++			command_alias = true;
++			cmd_count++;
++		} else if (strcmp(applet, "reboot") == 0) {
++			do_reboot = true;
++			xasprintf(&state, "%s", "reboot");
++			command_alias = true;
++			cmd_count++;
++		} else if (strcmp(applet, "halt") == 0) {
++			do_halt = true;
++			xasprintf(&state, "%s", "halt");
++			command_alias = true;
++			cmd_count++;
++		}
++	} else if (strcmp(applet, "poweroff") == 0 ||
++	    strcmp(applet, "shutdown") == 0 ||
++	    strcmp(applet, "reboot") == 0 ||
++	    strcmp(applet, "halt") == 0) {
++		command_alias = true;
++	}
+ 	if (geteuid() != 0)
+ 		eerrorx("%s: you must be root\n", applet);
+ 	if (cmd_count != 1) {
+@@ -266,10 +291,15 @@
+ 	}
+ 
+ 	if (optind >= argc) {
+-		eerror("%s: No shutdown time specified", applet);
+-		usage(EXIT_FAILURE);
++		if (command_alias)
++			time_arg = "0";
++		else {
++			eerror("%s: No shutdown time specified", applet);
++			usage(EXIT_FAILURE);
++		}
++	} else {
++		time_arg = argv[optind];
+ 	}
+-	time_arg = argv[optind];
+ 	if (*time_arg == '+')
+ 		time_arg++;
+ 	if (strcasecmp(time_arg, "now") == 0)

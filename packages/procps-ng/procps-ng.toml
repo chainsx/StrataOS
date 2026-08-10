@@ -1,0 +1,10 @@
+name = "procps-ng"
+version = "4.0.5"
+kind = "target"
+build_system = "autotools"
+dependencies = ["ncurses"]
+configure_args = ["--disable-static", "--enable-shared", "--disable-nls", "--disable-kill", "--disable-w", "--disable-skill", "--disable-pidof", "--disable-pidwait", "--without-ncurses", "--without-systemd", "--without-elogind"]
+
+[source]
+url = "https://downloads.sourceforge.net/project/procps-ng/Production/procps-ng-{version}.tar.xz"
+sha256 = "c2e6d193cc78f84cd6ddb72aaf6d5c6a9162f0470e5992092057f5ff518562fa"

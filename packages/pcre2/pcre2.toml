@@ -1,0 +1,9 @@
+name = "pcre2"
+version = "10.45"
+kind = "target"
+build_system = "cmake"
+dependencies = ["zlib", "bzip2"]
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DPCRE2_BUILD_PCRE2_8=ON", "-DPCRE2_BUILD_PCRE2_16=OFF", "-DPCRE2_BUILD_PCRE2_32=OFF", "-DPCRE2_BUILD_TESTS=OFF", "-DPCRE2_BUILD_PCRE2GREP=ON", "-DPCRE2_SUPPORT_JIT=ON", "-DPCRE2_SUPPORT_LIBZ=ON", "-DPCRE2_SUPPORT_LIBBZ2=ON"]
+
+[source]
+url = "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-{version}/pcre2-{version}.tar.bz2"

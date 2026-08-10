@@ -1,0 +1,44 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -1 | sed 's/^"//; s/"$//' | json_escape)
+kernel=$(uname -r | json_escape)
+arch=$(uname -m | json_escape)
+host=$(hostname | json_escape)
+uptime=$(cut -d. -f1 /proc/uptime)
+mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+mem_available=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+swap_total=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+swap_free=$(awk '/^SwapFree:/ {print $2}' /proc/meminfo)
+load=$(cut -d' ' -f1-3 /proc/loadavg | json_escape)
+cpu_model=$(awk -F: '/^(model name|Hardware)[[:space:]]*:/ {sub(/^[[:space:]]*/, "", $2); print $2; exit}' /proc/cpuinfo | json_escape)
+cpu_count=$(awk '/^processor[[:space:]]*:/ {count++} END {print count + 0}' /proc/cpuinfo)
+board_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || tr -d '\000' < /proc/device-tree/model 2>/dev/null || true)
+board_product=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
+hardware=$(printf '%s %s' "$board_vendor" "$board_product" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/[[:space:]][[:space:]]*/ /g' | json_escape)
+[ -n "$hardware" ] || hardware="Unknown"
+if [ -d /sys/firmware/efi ]; then firmware=UEFI; else firmware=BIOS/firmware; fi
+virtualization=Physical
+case "$board_vendor $board_product" in
+    *QEMU*|*KVM*|*VMware*|*VirtualBox*|*Xen*|*Microsoft*Corporation*) virtualization=Virtualized ;;
+esac
+[ -r /sys/hypervisor/type ] && virtualization=$(cat /sys/hypervisor/type 2>/dev/null)
+virtualization=$(printf '%s' "$virtualization" | json_escape)
+network_interface_count=$(find /sys/class/net -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+root_stats=$(df -Pk / 2>/dev/null | awk 'NR == 2 {print $2 " " $3 " " $4}')
+set -- $root_stats
+disk_total=${1:-0}
+disk_used=${2:-0}
+disk_available=${3:-0}
+machine_id=$(cat /etc/machine-id 2>/dev/null | json_escape)
+boot_id=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null | json_escape)
+process_count=$(find /proc -maxdepth 1 -type d -name '[0-9]*' 2>/dev/null | wc -l)
+local_time=$(date '+%Y-%m-%d %H:%M:%S %Z' | json_escape)
+data_stats=$(df -Pk /state 2>/dev/null | awk 'NR == 2 {print $2 " " $3 " " $4}')
+set -- $data_stats
+data_total=${1:-0}; data_used=${2:-0}; data_available=${3:-0}
+printf '{"os":"%s","kernel":"%s","architecture":"%s","hostname":"%s","uptime_seconds":%s,"memory_total_kib":%s,"memory_available_kib":%s,"swap_total_kib":%s,"swap_free_kib":%s,"load":"%s","cpu_model":"%s","cpu_count":%s,"hardware":"%s","firmware":"%s","virtualization":"%s","network_interface_count":%s,"disk_total_kib":%s,"disk_used_kib":%s,"disk_available_kib":%s,"data_total_kib":%s,"data_used_kib":%s,"data_available_kib":%s,"machine_id":"%s","boot_id":"%s","process_count":%s,"local_time":"%s"}\n' \
+    "$os" "$kernel" "$arch" "$host" "$uptime" "$mem_total" "$mem_available" "$swap_total" "$swap_free" "$load" \
+    "$cpu_model" "$cpu_count" "$hardware" "$firmware" "$virtualization" "$network_interface_count" "$disk_total" "$disk_used" "$disk_available" \
+    "$data_total" "$data_used" "$data_available" "$machine_id" "$boot_id" "$process_count" "$local_time"

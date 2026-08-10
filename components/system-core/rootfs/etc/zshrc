@@ -1,0 +1,20 @@
+if [[ -o interactive ]]; then
+    if [[ -t 0 ]]; then
+        stty erase '^?' 2>/dev/null || true
+    fi
+
+    bindkey -e
+    bindkey '^?' backward-delete-char
+    bindkey '^H' backward-delete-char
+    zmodload zsh/terminfo 2>/dev/null || true
+    [[ -n "${terminfo[kbs]-}" ]] && bindkey "${terminfo[kbs]}" backward-delete-char
+
+    autoload -Uz compinit && compinit
+    setopt autocd HIST_IGNORE_ALL_DUPS SHARE_HISTORY
+    HISTSIZE=5000
+    SAVEHIST=5000
+    PROMPT='%F{cyan}%n@%m%f:%F{blue}%~%f %# '
+
+    alias ll='ls -alF'
+    alias dps='docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"'
+fi

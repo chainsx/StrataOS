@@ -1,0 +1,12 @@
+name = "lvm2"
+version = "2.03.31"
+kind = "target"
+build_system = "special"
+special = "lvm2"
+dependencies = []
+configure_args = ["--prefix=/usr", "--sbindir=/sbin", "--libdir=/usr/lib", "--enable-shared", "--disable-static_link", "--disable-readline", "--disable-selinux", "--disable-systemd-journal", "--without-systemd", "--without-udev", "--with-symvers=no", "--disable-use-lvmlockd", "--disable-use-lvmpolld", "--disable-notify-dbus", "--with-default-run-dir=/run/lvm", "--with-default-locking-dir=/run/lock/lvm"]
+build_args = ["device-mapper"]
+install_args = ["install_device-mapper"]
+
+[source]
+url = "https://sourceware.org/ftp/lvm2/LVM2.{version}.tgz"

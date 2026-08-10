@@ -1,0 +1,9 @@
+name = "popt"
+version = "1.19"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--disable-static", "--enable-shared"]
+
+[source]
+url = "https://ftp.osuosl.org/pub/rpm/popt/releases/popt-1.x/popt-{version}.tar.gz"

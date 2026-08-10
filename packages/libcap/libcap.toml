@@ -1,0 +1,11 @@
+name = "libcap"
+version = "2.76"
+kind = "target"
+build_system = "special"
+special = "libcap"
+dependencies = []
+build_args = ["PAM_CAP=no", "RAISE_SETFCAP=no", "GOLANG=no", "prefix=/usr", "lib=lib"]
+install_args = ["prefix=/usr", "lib=lib", "PAM_CAP=no", "RAISE_SETFCAP=no", "GOLANG=no"]
+
+[source]
+url = "https://www.kernel.org/pub/linux/libs/security/linux-privs/libcap2/libcap-{version}.tar.xz"

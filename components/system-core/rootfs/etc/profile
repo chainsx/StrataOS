@@ -1,0 +1,4 @@
+for profile in /etc/profile.d/*.sh; do
+    [ -r "$profile" ] && . "$profile"
+done
+unset profile

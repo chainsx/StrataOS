@@ -1,0 +1,11 @@
+name = "python"
+version = "3.13.14"
+kind = "target"
+build_system = "autotools"
+dependencies = ["host-python", "zlib", "bzip2", "openssl", "libffi", "sqlite", "ncurses"]
+configure_args = ["--enable-shared", "--without-ensurepip", "--disable-test-modules", "--with-build-python={host}/bin/python3.13"]
+environment = ["ac_cv_buggy_getaddrinfo=no"]
+
+[source]
+url = "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz"
+sha256 = "639e43243c620a308f968213df9e00f2f8f62332f7adbaa7a7eeb9783057c690"

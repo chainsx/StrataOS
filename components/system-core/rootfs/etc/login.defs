@@ -1,0 +1,9 @@
+ENV_SUPATH PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV_PATH PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+UID_MIN 1000
+UID_MAX 60000
+GID_MIN 1000
+GID_MAX 60000
+CREATE_HOME yes
+USERGROUPS_ENAB yes
+UMASK 027

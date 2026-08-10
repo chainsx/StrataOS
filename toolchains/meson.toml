@@ -1,0 +1,5 @@
+name = "meson"
+version = "1.8.2"
+
+[source]
+url = "https://github.com/mesonbuild/meson/releases/download/{version}/meson-{version}.tar.gz"

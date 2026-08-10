@@ -1,0 +1,17 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+[ "${REQUEST_METHOD:-GET}" = POST ] || { printf '{"error":"method not allowed"}\n'; exit 0; }
+length=${CONTENT_LENGTH:-0}
+case "$length" in ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0;; esac
+[ "$length" -le 1024 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+body=$(dd bs=1 count="$length" 2>/dev/null)
+action=$(printf '%s' "$body" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([A-Za-z-]*\)".*/\1/p')
+case "$action" in
+    reboot|poweroff)
+        printf '{"state":"scheduled","action":"%s"}\n' "$action"
+        /usr/bin/setsid sh -c "sleep 1; exec /sbin/$action" >/dev/null 2>&1 &
+        ;;
+    *) printf '{"error":"invalid power action"}\n' ;;
+esac

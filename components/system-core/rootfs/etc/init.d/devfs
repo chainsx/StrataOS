@@ -1,0 +1,11 @@
+#!/sbin/openrc-run
+description="Mount devtmpfs"
+depend() { before *; }
+start() {
+    mountpoint -q /dev || mount -t devtmpfs -o mode=0755,nosuid devtmpfs /dev
+    mkdir -p /dev/pts /dev/shm /dev/mqueue
+    mountpoint -q /dev/pts || mount -t devpts -o gid=5,mode=620 devpts /dev/pts
+    mountpoint -q /dev/shm || mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /dev/shm
+    # Ensure standard device permissions
+    chmod 0666 /dev/null /dev/console /dev/tty /dev/ptmx 2>/dev/null || true
+}

@@ -1,0 +1,9 @@
+name = "host-wayland"
+version = "1.23.1"
+kind = "host"
+build_system = "meson"
+dependencies = ["host-expat"]
+configure_args = ["-Dlibraries=false", "-Dscanner=true", "-Dtests=false", "-Ddocumentation=false", "-Ddtd_validation=false"]
+
+[source]
+url = "https://gitlab.freedesktop.org/wayland/wayland/-/releases/{version}/downloads/wayland-{version}.tar.xz"

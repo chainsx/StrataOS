@@ -1,0 +1,9 @@
+name = "libpsl"
+version = "0.21.5"
+kind = "target"
+build_system = "meson"
+dependencies = []
+configure_args = ["-Druntime=no", "-Dbuiltin=false", "-Dtests=false", "-Ddocs=false"]
+
+[source]
+url = "https://github.com/rockdaboot/libpsl/releases/download/{version}/libpsl-{version}.tar.gz"

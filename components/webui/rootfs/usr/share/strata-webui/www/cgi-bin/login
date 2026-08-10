@@ -1,0 +1,38 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+
+fail() {
+    sleep 1
+    printf 'Status: 401 Unauthorized\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+    printf '{"error":"invalid username or password"}\n'
+    exit 0
+}
+
+[ "${REQUEST_METHOD:-}" = POST ] || fail
+username=${QUERY_STRING#username=}
+[ "$username" != "$QUERY_STRING" ] || fail
+case "$username" in ''|-*|*[!A-Za-z0-9_.-]*) fail ;; esac
+length=${CONTENT_LENGTH:-0}
+case "$length" in ''|*[!0-9]*) fail ;; esac
+[ "$length" -gt 0 ] && [ "$length" -le 4096 ] || fail
+
+authenticated=$(
+    dd bs=1 count="$length" 2>/dev/null |
+        /usr/sbin/strata-authenticate "$username"
+) || fail
+[ "$authenticated" = "$username" ] || fail
+
+sessions=/run/strata-webui/auth-sessions
+mkdir -p "$sessions"
+chmod 0700 "$sessions"
+token=$(openssl rand -hex 32) || fail
+expires=$(($(date +%s) + 43200))
+umask 077
+printf '%s\t%s\n' "$expires" "$authenticated" > "$sessions/$token"
+printf 'Content-Type: application/json\r\nCache-Control: no-store\r\n\r\n'
+setup_required=false
+if [ "$authenticated" = root ]; then
+    root_hash=$(awk -F: '$1=="root"{print $2;exit}' /etc/shadow 2>/dev/null)
+    case "$root_hash" in '$6$strataos$'*) setup_required=true ;; esac
+fi
+printf '{"token":"%s","username":"%s","expires_in":43200,"setup_required":%s}\n' "$token" "$(printf '%s' "$authenticated" | json_escape)" "$setup_required"

@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+name="Console getty"
+command=/sbin/agetty
+command_args="-L 115200 console vt100"
+supervisor=supervise-daemon
+respawn_delay=2
+respawn_max=0
+depend() { need localmount; after strataos-logging; before docker; }

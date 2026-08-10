@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+log() { printf 'firstboot: %s\n' "$*" >&2; }
+
+identity=/var/lib/strataos/openssh
+marker="$identity/.initialized"
+legacy_identity=/state/openssh
+
+# Ensure sshd loads drop-in configs with HostKey directives
+if [ -f /etc/ssh/sshd_config ] && ! grep -q '^Include /etc/ssh/sshd_config.d' /etc/ssh/sshd_config; then
+    log "adding Include directive to sshd_config"
+    echo 'Include /etc/ssh/sshd_config.d/*.conf' >> /etc/ssh/sshd_config
+fi
+
+if [ -s "$marker" ]; then
+    log "already initialized; skipping key generation"
+    exit 0
+fi
+
+log "generating SSH host keys in $identity"
+mkdir -p "$identity"
+chmod 0700 "$identity"
+
+# Releases before the standalone OpenSSH component kept host keys in the
+# system-core state volume. Preserve the server identity during the split.
+if [ -d "$legacy_identity" ] && [ ! -s "$identity/ssh_host_ed25519_key" ]; then
+    log "migrating legacy SSH host identity"
+    cp -a "$legacy_identity/." "$identity/"
+fi
+
+if [ ! -s "$identity/ssh_host_ed25519_key" ]; then
+    log "generating ed25519 host key"
+    ssh-keygen -q -t ed25519 -N '' -f "$identity/ssh_host_ed25519_key" || {
+        log "WARNING: failed to generate ed25519 host key"
+    }
+fi
+if [ ! -s "$identity/ssh_host_rsa_key" ]; then
+    log "generating RSA host key"
+    ssh-keygen -q -t rsa -b 3072 -N '' -f "$identity/ssh_host_rsa_key" || {
+        log "WARNING: failed to generate RSA host key"
+    }
+fi
+
+: > "$marker"
+chmod 0600 "$marker"
+log "firstboot complete"

@@ -1,0 +1,11 @@
+name = "openssl"
+version = "3.5.1"
+kind = "target"
+build_system = "special"
+special = "openssl"
+dependencies = ["zlib"]
+configure_args = ["{openssl_target}", "shared", "no-tests", "no-docs", "no-legacy", "no-afalgeng", "--prefix=/usr", "--libdir=lib", "--openssldir=/etc/ssl"]
+install_args = ["install_sw", "install_ssldirs"]
+
+[source]
+url = "https://github.com/openssl/openssl/releases/download/openssl-{version}/openssl-{version}.tar.gz"

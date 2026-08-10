@@ -1,0 +1,41 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+[ "$AUTH_USER" = root ] || { printf '{"error":"root session required"}\n'; exit 0; }
+root_hash=$(awk -F: '$1=="root"{print $2;exit}' /etc/shadow 2>/dev/null)
+case "$root_hash" in '$6$strataos$'*) ;; *) printf '{"error":"default credentials are no longer active"}\n'; exit 0 ;; esac
+[ "${REQUEST_METHOD:-GET}" = POST ] || { printf '{"setup_required":true}\n'; exit 0; }
+length=${CONTENT_LENGTH:-0}; case "$length" in ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0;; esac
+[ "$length" -le 8192 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+body=$(dd bs=1 count="$length" 2>/dev/null)
+username=$(printf '%s' "$body" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([a-z_][a-z0-9_-]*\)".*/\1/p')
+root_b64=$(printf '%s' "$body" | sed -n 's/.*"root_password"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9+/=]*\)".*/\1/p')
+user_b64=$(printf '%s' "$body" | sed -n 's/.*"user_password"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9+/=]*\)".*/\1/p')
+[ -n "$username" ] && [ ${#username} -le 32 ] || { printf '{"error":"invalid administrator username"}\n'; exit 0; }
+id "$username" >/dev/null 2>&1 && { printf '{"error":"user already exists"}\n'; exit 0; }
+root_password=$(printf '%s' "$root_b64" | base64 -d 2>/dev/null) || { printf '{"error":"invalid root password encoding"}\n'; exit 0; }
+user_password=$(printf '%s' "$user_b64" | base64 -d 2>/dev/null) || { printf '{"error":"invalid user password encoding"}\n'; exit 0; }
+for password in "$root_password" "$user_password"; do
+    [ ${#password} -ge 10 ] && [ ${#password} -le 256 ] || { printf '{"error":"password must contain 10-256 characters"}\n'; exit 0; }
+    case "$password" in *:*) printf '{"error":"password cannot contain a colon"}\n'; exit 0;; esac
+    printf '%s' "$password" | LC_ALL=C grep -q '[[:cntrl:]]' && { printf '{"error":"password contains unsupported control characters"}\n'; exit 0; }
+done
+groups=""
+for group in wheel audio video input docker flatpak netdev; do grep -q "^$group:" /etc/group 2>/dev/null && groups="${groups}${groups:+,}$group"; done
+if [ -n "$groups" ]; then
+    /usr/sbin/useradd -m -U -s /bin/zsh -G "$groups" "$username" >/dev/null 2>&1
+else
+    /usr/sbin/useradd -m -U -s /bin/zsh "$username" >/dev/null 2>&1
+fi || { printf '{"error":"unable to create administrator"}\n'; exit 0; }
+if ! { printf 'root:%s\n' "$root_password"; printf '%s:%s\n' "$username" "$user_password"; } | /usr/sbin/chpasswd; then
+    /usr/sbin/userdel -r "$username" >/dev/null 2>&1 || true
+    printf '{"error":"unable to update account passwords"}\n'; exit 0
+fi
+state_dir=/root/.local/state/strataos
+mkdir -p "$state_dir"; chmod 0700 "$state_dir"
+: > "$state_dir/root-password-changed"; : > "$state_dir/initial-setup-complete"; chmod 0600 "$state_dir"/*
+rm -f /run/strata-webui/auth-sessions/*
+root_password= user_password=
+printf '{"success":true,"username":"%s"}\n' "$username"

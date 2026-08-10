@@ -1,0 +1,97 @@
+#!/bin/sh
+# Owned by the webui-flatpak capability component.
+set -eu
+
+state_dir=/run/strata-webui/install
+pidfile=$state_dir/pid
+statefile=$state_dir/state
+reffile=$state_dir/ref
+logfile=$state_dir/flatpak.log
+
+valid_ref() {
+    case "$1" in
+        ''|-*|*[!A-Za-z0-9._-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+valid_remote() {
+    case "$1" in
+        ''|-*|*[!A-Za-z0-9._-]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+write_state() {
+    printf '%s\n' "$1" > "$statefile.tmp"
+    mv "$statefile.tmp" "$statefile"
+}
+
+running() {
+    [ -s "$pidfile" ] && kill -0 "$(cat "$pidfile" 2>/dev/null)" 2>/dev/null
+}
+
+progress() {
+    [ -s "$logfile" ] || { printf '0\n'; return; }
+    value=$(tr '\033\r' '\n\n' < "$logfile" |
+        sed -n 's/.*]9;4;1;\([0-9][0-9]*\).*/\1/p' | tail -n 1)
+    case "$value" in ''|*[!0-9]*) value=0 ;; esac
+    [ "$value" -le 100 ] || value=100
+    printf '%s\n' "$value"
+}
+
+operation() {
+    [ -s "$logfile" ] || { printf '%s\n' '-'; return; }
+    value=$(tr '\r' '\n' < "$logfile" |
+        sed -n 's/.*\(Installing\|Updating\) \([0-9][0-9]*\/[0-9][0-9]*\).*/\2/p' |
+        tail -n 1)
+    case "$value" in ''|*[!0-9/]*) value=- ;; esac
+    printf '%s\n' "$value"
+}
+
+case "${1:-}" in
+    start)
+        ref=${2:-}
+        remote=${3:-}
+        valid_ref "$ref" || { echo "invalid Flatpak package name" >&2; exit 2; }
+        valid_remote "$remote" || { echo "invalid Flatpak source name" >&2; exit 2; }
+        flatpak remote-info --system "$remote" "$ref" >/dev/null 2>&1 || {
+            echo "application is not available from the selected Flatpak source" >&2; exit 4;
+        }
+        mkdir -p "$state_dir"
+        if running; then
+            echo "another Flatpak installation is already running" >&2
+            exit 3
+        fi
+        rm -f "$pidfile" "$logfile"
+        printf '%s\n' "$ref" > "$reffile"
+        write_state starting
+        /usr/bin/setsid "$0" worker "$ref" "$remote" </dev/null >/dev/null 2>&1 &
+        echo "$!" > "$pidfile"
+        ;;
+    worker)
+        ref=${2:-}
+        remote=${3:-}
+        valid_ref "$ref" || exit 2
+        valid_remote "$remote" || exit 2
+        write_state running
+        command="FLATPAK_TTY_PROGRESS=1 flatpak install --system --assumeyes --or-update $remote $ref"
+        if /usr/bin/script -q -e -c "$command" "$logfile" >/dev/null 2>&1; then
+            write_state done
+        else
+            write_state error
+        fi
+        rm -f "$pidfile"
+        ;;
+    status)
+        mkdir -p "$state_dir"
+        state=$(cat "$statefile" 2>/dev/null || printf 'idle')
+        ref=$(cat "$reffile" 2>/dev/null || true)
+        percent=$(progress)
+        part=$(operation)
+        if running; then state=running; fi
+        [ "$state" != done ] || percent=100
+        printf '%s\t%s\t%s\t%s\n' "$state" "$percent" "$ref" "$part"
+        ;;
+    *) echo "usage: web-flatpak-install {start PACKAGE REMOTE|status}" >&2; exit 2 ;;
+esac

@@ -1,0 +1,5 @@
+name = "musl"
+version = "1.2.5"
+
+[source]
+url = "https://musl.libc.org/releases/musl-{version}.tar.gz"

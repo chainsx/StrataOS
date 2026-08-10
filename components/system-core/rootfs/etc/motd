@@ -1,0 +1,5 @@
+StrataOS immutable image
+
+Root is assembled from read-only components with an ephemeral tmpfs overlay.
+Persistent paths are declared and owned by their corresponding components.
+Run `strataos-status` to inspect the current layout.

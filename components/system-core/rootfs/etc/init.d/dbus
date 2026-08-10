@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+name="D-Bus system bus"
+command=/usr/bin/dbus-daemon
+command_args="--system --nofork --nopidfile"
+command_background=yes
+pidfile=/run/dbus/pid
+output_log=/var/log/dbus.log
+error_log=/var/log/dbus.log
+depend() { need localmount; use logger; before flatpak; }
+start_pre() {
+    checkpath --directory --owner messagebus:messagebus --mode 0755 /run/dbus
+    checkpath --directory --owner messagebus:messagebus --mode 0755 /var/lib/dbus
+    [ -s /var/lib/dbus/machine-id ] || dbus-uuidgen --ensure=/var/lib/dbus/machine-id
+}

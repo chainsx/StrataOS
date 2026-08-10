@@ -1,0 +1,32 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+fail() { printf '{"error":"%s"}\n' "$(printf '%s' "$1" | json_escape)"; exit 0; }
+
+case "${REQUEST_METHOD:-GET}" in
+    POST)
+        length=${CONTENT_LENGTH:-0}
+        case "$length" in ''|*[!0-9]*) fail "invalid content length" ;; esac
+        [ "$length" -le 4096 ] || fail "request body too large"
+        body=$(dd bs=1 count="$length" 2>/dev/null)
+        image=$(printf '%s' "$body" | sed -n 's/.*"image"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')
+        result=$(/usr/libexec/strataos/web-docker-pull start "$image" 2>&1) || fail "$result"
+        ;;
+    GET) ;;
+    *) fail "method not allowed" ;;
+esac
+
+status=$(/usr/libexec/strataos/web-docker-pull status 2>&1) || fail "$status"
+old_ifs=$IFS
+IFS="$(printf '\t')"
+read -r state progress image operation message <<EOF
+$status
+EOF
+IFS=$old_ifs
+printf '{"state":"%s","progress":%s,"image":"%s","operation":"%s","message":"%s"}\n' \
+    "$(printf '%s' "$state" | json_escape)" "${progress:-0}" \
+    "$(printf '%s' "$image" | json_escape)" "$(printf '%s' "$operation" | json_escape)" \
+    "$(printf '%s' "$message" | json_escape)"

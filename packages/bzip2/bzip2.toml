@@ -1,0 +1,10 @@
+name = "bzip2"
+version = "1.0.8"
+kind = "target"
+build_system = "special"
+special = "bzip2"
+dependencies = []
+build_args = ["libbz2.a", "bzip2", "bzip2recover"]
+
+[source]
+url = "https://sourceware.org/pub/bzip2/bzip2-{version}.tar.gz"

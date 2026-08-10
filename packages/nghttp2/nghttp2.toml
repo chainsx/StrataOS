@@ -1,0 +1,9 @@
+name = "nghttp2"
+version = "1.64.0"
+kind = "target"
+build_system = "cmake"
+dependencies = ["zlib"]
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DBUILD_TESTING=OFF"]
+
+[source]
+url = "https://github.com/nghttp2/nghttp2/releases/download/v{version}/nghttp2-{version}.tar.xz"

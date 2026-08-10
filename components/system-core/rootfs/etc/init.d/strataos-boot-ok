@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+
+description="Emit the StrataOS boot-complete marker"
+
+depend() {
+    need strataos-storage
+    use strataos-logging sshd docker
+    after *
+}
+
+start() {
+    local version manifest
+    version="$(uname -r)"
+    manifest="$(/usr/libexec/strataos/componentctl active-manifest 2>/dev/null \
+        || printf '%s' unknown)"
+    ebegin "StrataOS ready"
+    if /usr/libexec/strataos/componentctl commit-boot; then
+        printf '\nSTRATAOS_BOOT_OK kernel=%s manifest=%s\n\n' \
+            "$version" "$manifest" >/dev/console
+        eend 0
+    else
+        eend 1 "component transaction was not committed"
+        return 1
+    fi
+}

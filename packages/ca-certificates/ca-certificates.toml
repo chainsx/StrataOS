@@ -1,0 +1,11 @@
+name = "ca-certificates"
+version = "2025-05-20"
+kind = "target"
+build_system = "special"
+special = "ca-certificates"
+dependencies = []
+
+[source]
+url = "https://curl.se/ca/cacert.pem"
+archive = "file"
+filename = "cacert-{version}.pem"

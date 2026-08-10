@@ -1,0 +1,22 @@
+diff --git a/sh/rc-cgroup.sh b/sh/rc-cgroup.sh
+index a293301..9fc099d 100644
+--- a/sh/rc-cgroup.sh
++++ b/sh/rc-cgroup.sh
+@@ -172,7 +172,7 @@ cgroup2_remove()
+ 		[ ! -e "${rc_cgroup_path}"/cgroup.events ] &&
+ 		return 0
+ 	grep -qx "$$" "${rc_cgroup_path}/cgroup.procs" &&
+-		printf "%d" 0 > "${cgroup_path}/cgroup.procs"
++		printf "%d" "$$" > "${cgroup_path}/cgroup.procs"
+ 	local key populated vvalue
+ 	while read -r key value; do
+ 		case "${key}" in
+@@ -194,7 +194,7 @@ cgroup2_set_limits()
+ 	rc_cgroup_path="${cgroup_path}/openrc.${RC_SVCNAME}"
+ 	[ ! -d "${rc_cgroup_path}" ] && mkdir "${rc_cgroup_path}"
+ 	[ -f "${rc_cgroup_path}"/cgroup.procs ] &&
+-		printf 0 > "${rc_cgroup_path}"/cgroup.procs
++		printf "%d" "$$" > "${rc_cgroup_path}"/cgroup.procs
+ 	[ -z "${rc_cgroup_settings}" ] && return 0
+ 	echo "${rc_cgroup_settings}" | while read -r key value; do
+ 		[ -z "${key}" ] && continue

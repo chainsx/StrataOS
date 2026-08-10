@@ -1,0 +1,35 @@
+#!/bin/zsh
+set -eu
+
+print 'StrataOS status'
+print '------------'
+cat /etc/strataos-release
+print
+print 'Compiler used for the kernel:'
+zcat /proc/config.gz 2>/dev/null | grep -E '^CONFIG_(CC_IS_CLANG|LD_IS_LLD)=' || \
+  print '  kernel config is not exposed at runtime; see build artifact clang-version.txt'
+print
+print 'Storage:'
+esp_mount="$(cat /run/strataos/esp.mount 2>/dev/null || print /run/strata-esp)"
+data_mount="$(cat /run/strataos/data.mount 2>/dev/null || print /run/strata-data)"
+mount | grep TARGET,SOURCE,FSTYPE,OPTIONS \
+  / "$esp_mount" "$data_mount" 2>/dev/null || true
+if [ -x /usr/libexec/strataos/componentctl ]; then
+  print
+  print 'Components and owned volumes:'
+  /usr/libexec/strataos/componentctl list --volumes || true
+fi
+if [ -r /proc/mdstat ]; then
+  print
+  print 'MD arrays:'
+  cat /proc/mdstat
+fi
+print
+print 'Services:'
+rc-service sshd status || true
+rc-service docker status || true
+print
+docker info --format 'Docker: {{.ServerVersion}} / {{.Driver}}' 2>/dev/null || true
+flatpak --version
+print
+/usr/local/sbin/strataos-log-status || true

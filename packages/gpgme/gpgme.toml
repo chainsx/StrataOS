@@ -1,0 +1,11 @@
+name = "gpgme"
+version = "1.24.3"
+kind = "target"
+build_system = "autotools"
+dependencies = ["libgpg-error", "libassuan"]
+configure_args = ["--disable-static", "--enable-shared", "--disable-gpg-test", "--disable-gpgsm-test", "--disable-g13-test", "--disable-gpgconf-test", "--enable-languages="]
+environment = ["GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config"]
+cppflags = ["-D_LARGEFILE64_SOURCE"]
+
+[source]
+url = "https://gnupg.org/ftp/gcrypt/gpgme/gpgme-{version}.tar.bz2"

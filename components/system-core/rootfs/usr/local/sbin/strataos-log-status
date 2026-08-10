@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -eu
+
+printf '%s\n' 'StrataOS logging status'
+printf 'mode: '
+if mountpoint -q /var/log; then
+    findmnt -n -o SOURCE,FSTYPE,OPTIONS /var/log 2>/dev/null || printf 'mounted\n'
+else
+    printf 'root overlay (not a dedicated mount)\n'
+fi
+printf 'messages: '
+if [ -e /var/log/messages ]; then
+    wc -c < /var/log/messages
+else
+    printf 'missing\n'
+fi
+printf 'early boot logs: '
+find /var/log/boot -maxdepth 1 -type f 2>/dev/null | wc -l

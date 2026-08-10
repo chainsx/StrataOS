@@ -1,0 +1,9 @@
+name = "json-c"
+version = "0.18"
+kind = "target"
+build_system = "cmake"
+dependencies = []
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DBUILD_TESTING=OFF", "-DDISABLE_WERROR=ON", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"]
+
+[source]
+url = "https://github.com/json-c/json-c/archive/refs/tags/json-c-{version}-20240915.tar.gz"

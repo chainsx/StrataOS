@@ -1,0 +1,166 @@
+#!/bin/sh
+set -eu
+
+export PATH=/sbin:/bin:/usr/sbin:/usr/bin
+
+mkdir -p /proc /sys /dev /run /newroot
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+chmod 0666 /dev/null /dev/console /dev/tty 2>/dev/null || true
+mount -t tmpfs -o mode=0755 tmpfs /run
+mkdir -p /dev/pts /run/strataos /run/strata-esp /run/strata-data /sys/fs/pstore
+mkdir -p /run/blkid
+mount -t devpts -o gid=5,mode=620 devpts /dev/pts
+# pstore is deferred until after switch_root to avoid interfering
+# with mount --move of /sys during the userspace transition.
+
+EARLY_LOG=/run/strataos/early-boot.log
+: > "$EARLY_LOG"
+
+log() {
+    message="strataos-init: $*"
+    printf '%s\n' "$message" >/dev/console 2>/dev/null || printf '%s\n' "$message"
+    printf '%s\n' "$message" >> "$EARLY_LOG"
+}
+
+panic() {
+    log "FATAL: $*"
+    log "dropping to the initramfs recovery shell"
+    exec sh
+}
+
+cmdline_get() {
+    wanted="$1" default="$2"
+    for token in $(cat /proc/cmdline); do
+        case "$token" in
+            "$wanted"=*) printf '%s\n' "${token#*=}"; return 0 ;;
+        esac
+    done
+    printf '%s\n' "$default"
+}
+
+find_label() {
+    label="$1" attempt=0
+    while test "$attempt" -lt 30; do
+        # Primary: use blkid -L (depends on /proc/partitions enumeration)
+        device="$(blkid -L "$label" 2>/dev/null || true)"
+        test -n "$device" && { printf '%s\n' "$device"; return 0; }
+        # Fallback: iterate partition devices and probe each one directly.
+        # This handles environments where blkid's device enumeration fails
+        # (e.g. proc/partitions not fully populated at early initramfs stage).
+        for dev in /dev/vd*[0-9] /dev/sd*[0-9] /dev/hd*[0-9] /dev/xvd*[0-9] /dev/nvme[0-9]n[0-9]p[0-9] /dev/mmcblk[0-9]p[0-9]; do
+            test -b "$dev" 2>/dev/null || continue
+            found="$(blkid -p "$dev" -s LABEL -o value 2>/dev/null || true)"
+            if test "$found" = "$label"; then
+                printf '%s\n' "$dev"; return 0
+            fi
+        done
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+ESP_LABEL="$(cmdline_get strata.esp_label STRATA_ESP)"
+DATA_LABEL="$(cmdline_get strata.data_label STRATA_DATA)"
+DATA_FS="$(cmdline_get strata.data_fs ext4)"
+ESP_DEV="$(find_label "$ESP_LABEL")" || panic "ESP label $ESP_LABEL not found"
+DATA_DEV="$(find_label "$DATA_LABEL")" || panic "data label $DATA_LABEL not found"
+
+mount -t vfat -o ro,umask=0077 "$ESP_DEV" /run/strata-esp \
+    || panic "cannot mount ESP"
+CONFIG_DIR=/run/strata-esp/strataos/config
+test -s "$CONFIG_DIR/storage.conf"  || panic "missing storage.conf on ESP"
+test -s "$CONFIG_DIR/logging.conf"  || panic "missing logging.conf on ESP"
+test -s "$CONFIG_DIR/components.conf" || panic "missing components.conf on ESP"
+
+kv_get() {
+    file="$1" key="$2" default="${3:-}"
+    value="$(awk -F= -v key="$key" '
+        $0 !~ /^[[:space:]]*#/ && $1 == key {
+            sub(/^[^=]*=/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit
+        }
+    ' "$file")"
+    test -n "$value"  && printf '%s\n' "$value" || printf '%s\n' "$default"
+}
+
+maybe_grow_partition() {
+    disk_conf="$CONFIG_DIR/disk.conf"
+    test -s "$disk_conf"  || return 0
+    test "$(kv_get "$disk_conf" partition.data.auto_grow yes)" = yes  || return 0
+    parent="$(lsblk -ndo PKNAME "$DATA_DEV" 2>/dev/null | awk 'NF {print $1; exit}' || true)"
+    partn="$(lsblk -ndo PARTN "$DATA_DEV" 2>/dev/null | awk 'NF {print $1; exit}' || true)"
+    test -n "$parent"  && test -n "$partn"  || {
+        log "cannot derive parent disk; skipping partition growth"
+        return 0
+    }
+    disk="/dev/$parent"
+    last="$(lsblk -nrpo NAME,TYPE "$disk" | awk '$2 == "part" {name=$1} END {print name}')"
+    test "$last" = "$DATA_DEV"  || {
+        log "data partition is not last; automatic growth refused"
+        return 0
+    }
+    before="$(blockdev --getsize64 "$DATA_DEV" 2>/dev/null)" \
+        || panic "cannot read data partition size"
+    umount /run/strata-esp || panic "cannot unmount ESP for partition growth"
+    sfdisk --relocate gpt-bak-std "$disk" >> /run/strataos/sfdisk.log 2>&1 \
+        && log "relocated GPT backup header on $disk" \
+        || log "sfdisk --relocate returned non-zero; continuing"
+    printf ', +\n' | sfdisk --force -N "$partn" "$disk" \
+        >> /run/strataos/sfdisk.log 2>&1 \
+        && log "sfdisk partition expand wrote successfully" \
+        || log "sfdisk --force -N returned non-zero (BLKRRPART may have failed)"
+    # sfdisk returns non-zero when the kernel rejects the BLKRRPART ioctl on
+    # newer kernels, even though the on-disk partition table was updated.  Use
+    # partx (BLKPG) to update the kernel's per-partition view independently.
+    partx -u "$disk" >> /run/strataos/sfdisk.log 2>&1 \
+        || log "partx -u returned non-zero; kernel partition view may be stale"
+    mount -t vfat -o ro,umask=0077 "$ESP_DEV" /run/strata-esp \
+        || panic "cannot remount ESP after partition growth"
+    sleep 1
+    after="$(blockdev --getsize64 "$DATA_DEV" 2>/dev/null)" \
+        || panic "cannot read updated data partition size"
+    if test "$after" -gt "$before"; then
+        log "expanded data partition from $before to $after bytes"
+    elif test "$after" -eq "$before"; then
+        log "data partition unchanged at $before bytes; see /run/strataos/sfdisk.log"
+    else
+        panic "data partition unexpectedly shrank from $before to $after bytes"
+    fi
+}
+
+maybe_grow_partition
+case "$DATA_FS" in
+    ext4)
+        rc=0
+        e2fsck -pf "$DATA_DEV" > /run/strataos/data-fsck.log 2>&1 || rc=$?
+        test "$rc" -le 1 || panic "outer ext4 check failed with code $rc"
+        resize2fs "$DATA_DEV" > /run/strataos/data-resize.log 2>&1 \
+            || panic "cannot resize outer ext4 filesystem"
+        mount -t ext4 -o rw,noatime,errors=remount-ro,noinit_itable "$DATA_DEV" /run/strata-data \
+            || panic "cannot mount Linux data partition"
+        ;;
+    btrfs)
+        mount -t btrfs -o rw,noatime "$DATA_DEV" /run/strata-data \
+            || panic "cannot mount Linux data partition"
+        btrfs filesystem resize max /run/strata-data > /run/strataos/data-resize.log 2>&1 \
+            || panic "cannot resize outer Btrfs filesystem"
+        ;;
+    *) panic "unsupported Linux data filesystem: $DATA_FS" ;;
+esac
+
+printf '%s\n' "$ESP_DEV" > /run/strataos/esp.device
+printf '%s\n' "$DATA_DEV" > /run/strataos/data.device
+printf '%s\n' /run/strata-esp > /run/strataos/esp.mount
+printf '%s\n' /run/strata-data > /run/strataos/data.mount
+log "mounted ESP $ESP_DEV and data $DATA_DEV"
+
+test -x /bin/strata-componentd  || panic "strata-componentd is missing"
+exec /bin/strata-componentd \
+    --esp /run/strata-esp \
+    --data /run/strata-data \
+    --newroot /newroot \
+    --config "$CONFIG_DIR" \
+    --early-log "$EARLY_LOG" \
+    --pstore /sys/fs/pstore

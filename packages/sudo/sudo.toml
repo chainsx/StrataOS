@@ -1,0 +1,9 @@
+name = "sudo"
+version = "1.9.17p2"
+kind = "target"
+build_system = "autotools"
+dependencies = ["zlib"]
+configure_args = ["--without-pam", "--without-selinux", "--without-sssd", "--without-linux-audit", "--disable-nls", "--disable-log-server", "--disable-python", "--disable-rpath", "--with-env-editor", "--with-rundir=/run/sudo"]
+
+[source]
+url = "https://www.sudo.ws/dist/sudo-{version}.tar.gz"

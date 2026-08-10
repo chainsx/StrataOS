@@ -1,0 +1,9 @@
+name = "sqlite"
+version = "3.50.1"
+kind = "target"
+build_system = "autotools"
+dependencies = ["zlib"]
+configure_args = ["--disable-static", "--enable-shared", "--disable-static-shell", "--disable-readline"]
+
+[source]
+url = "https://www.sqlite.org/2025/sqlite-autoconf-3500100.tar.gz"

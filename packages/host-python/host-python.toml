@@ -1,0 +1,10 @@
+name = "host-python"
+version = "3.13.14"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--without-ensurepip", "--disable-test-modules"]
+
+[source]
+url = "https://www.python.org/ftp/python/{version}/Python-{version}.tar.xz"
+sha256 = "639e43243c620a308f968213df9e00f2f8f62332f7adbaa7a7eeb9783057c690"

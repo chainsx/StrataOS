@@ -1,0 +1,4 @@
+[Init]
+# The upstream default uses grep -P, which BusyBox grep intentionally does not
+# provide. Extract nft rule handles with portable sed instead.
+_nft_get_handle_id = sed -n 's/.* handle \([0-9][0-9]*\)$/\1/p'

@@ -1,0 +1,428 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+read_body() {
+    length=${CONTENT_LENGTH:-0}
+    case "$length" in ''|*[!0-9]*) fail "invalid content length" ;; esac
+    [ "$length" -le 32768 ] || fail "request body too large"
+    dd bs=1 count="$length" 2>/dev/null
+}
+
+field() {
+    printf '%s' "$body" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p'
+}
+
+boolean_field() {
+    printf '%s' "$body" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p'
+}
+
+fail() {
+    printf '{"error":"%s"}\n' "$(printf '%s' "$1" | json_escape)"
+    exit 0
+}
+
+valid_object() {
+    case "$1" in ''|-*|*[!A-Za-z0-9_.:@/+-]*) return 1 ;; esac
+}
+
+run_docker() {
+    output=$(docker "$@" 2>&1) || fail "$output"
+}
+
+docker_ready() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+rollback_recreate() {
+    [ -n "${recreate_old_id:-}" ] || return 0
+    [ -z "${recreate_new_id:-}" ] || docker rm -f "$recreate_new_id" >/dev/null 2>&1 || true
+    docker rename "$recreate_old_id" "$recreate_old_name" >/dev/null 2>&1 || true
+    [ "${recreate_was_running:-false}" != true ] || docker start "$recreate_old_id" >/dev/null 2>&1 || true
+}
+
+# Builds a `docker create ...` argv from the request body fields shared by
+# the "create" and "recreate" actions, runs it, and leaves the new
+# container id in $output (last line of `docker create`).
+create_from_body() {
+    image=$(field image)
+    name=$(field name)
+    valid_object "$image" || fail "invalid image reference"
+    [ -z "$name" ] || valid_object "$name" || fail "invalid container name"
+    pull_before=$(boolean_field pull_before)
+    [ "$pull_before" != true ] || run_docker pull "$image"
+    set -- create
+    [ -z "$name" ] || set -- "$@" --name "$name"
+    hostname=$(field hostname); [ -z "$hostname" ] || set -- "$@" --hostname "$hostname"
+    domainname=$(field domainname); [ -z "$domainname" ] || set -- "$@" --domainname "$domainname"
+    restart=$(field restart)
+    case "$restart" in ''|no|always|unless-stopped|on-failure|on-failure:[0-9]*) ;; *) fail "invalid restart policy" ;; esac
+    [ -z "$restart" ] || set -- "$@" --restart "$restart"
+    network=$(field network); [ -z "$network" ] || set -- "$@" --network "$network"
+    ip_address=$(field ip_address); [ -z "$ip_address" ] || set -- "$@" --ip "$ip_address"
+    mac_address=$(field mac_address); [ -z "$mac_address" ] || set -- "$@" --mac-address "$mac_address"
+    workdir=$(field workdir); [ -z "$workdir" ] || set -- "$@" --workdir "$workdir"
+    user=$(field user); [ -z "$user" ] || set -- "$@" --user "$user"
+    entrypoint=$(field entrypoint); [ -z "$entrypoint" ] || set -- "$@" --entrypoint "$entrypoint"
+    memory=$(field memory); [ -z "$memory" ] || set -- "$@" --memory "$memory"
+    memory_swap=$(field memory_swap); [ -z "$memory_swap" ] || set -- "$@" --memory-swap "$memory_swap"
+    cpus=$(field cpus); [ -z "$cpus" ] || set -- "$@" --cpus "$cpus"
+    cpuset_cpus=$(field cpuset_cpus); [ -z "$cpuset_cpus" ] || set -- "$@" --cpuset-cpus "$cpuset_cpus"
+    pids_limit=$(field pids_limit); [ -z "$pids_limit" ] || set -- "$@" --pids-limit "$pids_limit"
+    shm_size=$(field shm_size); [ -z "$shm_size" ] || set -- "$@" --shm-size "$shm_size"
+    stop_signal=$(field stop_signal); [ -z "$stop_signal" ] || set -- "$@" --stop-signal "$stop_signal"
+    stop_timeout=$(field stop_timeout); [ -z "$stop_timeout" ] || set -- "$@" --stop-timeout "$stop_timeout"
+    health_cmd=$(field health_cmd); [ -z "$health_cmd" ] || set -- "$@" --health-cmd "$health_cmd"
+    health_interval=$(field health_interval); [ -z "$health_interval" ] || set -- "$@" --health-interval "$health_interval"
+    health_timeout=$(field health_timeout); [ -z "$health_timeout" ] || set -- "$@" --health-timeout "$health_timeout"
+    health_start_period=$(field health_start_period); [ -z "$health_start_period" ] || set -- "$@" --health-start-period "$health_start_period"
+    health_retries=$(field health_retries); [ -z "$health_retries" ] || set -- "$@" --health-retries "$health_retries"
+    privileged=$(boolean_field privileged); [ "$privileged" != true ] || set -- "$@" --privileged
+    auto_remove=$(boolean_field auto_remove); [ "$auto_remove" != true ] || set -- "$@" --rm
+    stdin_open=$(boolean_field stdin_open); [ "$stdin_open" != true ] || set -- "$@" --interactive
+    tty=$(boolean_field tty); [ "$tty" != true ] || set -- "$@" --tty
+    readonly_rootfs=$(boolean_field readonly); [ "$readonly_rootfs" != true ] || set -- "$@" --read-only
+    init_process=$(boolean_field init_process); [ "$init_process" != true ] || set -- "$@" --init
+    publish_all=$(boolean_field publish_all); [ "$publish_all" != true ] || set -- "$@" --publish-all
+    envs=$(field envs)
+    old_ifs=$IFS; IFS=','
+    for item in $envs; do [ -z "$item" ] || set -- "$@" --env "$item"; done
+    ports=$(field ports)
+    for item in $ports; do [ -z "$item" ] || set -- "$@" --publish "$item"; done
+    volumes=$(field volumes)
+    for item in $volumes; do [ -z "$item" ] || set -- "$@" --volume "$item"; done
+    labels=$(field labels)
+    for item in $labels; do [ -z "$item" ] || set -- "$@" --label "$item"; done
+    dns=$(field dns)
+    for item in $dns; do [ -z "$item" ] || set -- "$@" --dns "$item"; done
+    extra_hosts=$(field extra_hosts)
+    for item in $extra_hosts; do [ -z "$item" ] || set -- "$@" --add-host "$item"; done
+    devices=$(field devices)
+    for item in $devices; do [ -z "$item" ] || set -- "$@" --device "$item"; done
+    cap_add=$(field cap_add)
+    for item in $cap_add; do [ -z "$item" ] || set -- "$@" --cap-add "$item"; done
+    cap_drop=$(field cap_drop)
+    for item in $cap_drop; do [ -z "$item" ] || set -- "$@" --cap-drop "$item"; done
+    security_opt=$(field security_opt)
+    for item in $security_opt; do [ -z "$item" ] || set -- "$@" --security-opt "$item"; done
+    sysctls=$(field sysctls)
+    for item in $sysctls; do [ -z "$item" ] || set -- "$@" --sysctl "$item"; done
+    tmpfs=$(field tmpfs)
+    IFS=';'
+    for item in $tmpfs; do [ -z "$item" ] || set -- "$@" --tmpfs "$item"; done
+    IFS=','
+    dns_search=$(field dns_search)
+    for item in $dns_search; do [ -z "$item" ] || set -- "$@" --dns-search "$item"; done
+    group_add=$(field group_add)
+    for item in $group_add; do [ -z "$item" ] || set -- "$@" --group-add "$item"; done
+    IFS=$old_ifs
+    extra_args=$(field extra_args)
+    for item in $extra_args; do
+        case "$item" in --*) set -- "$@" "$item" ;; *) fail "additional arguments must begin with --" ;; esac
+    done
+    set -- "$@" "$image"
+    command=$(field command)
+    for item in $command; do set -- "$@" "$item"; done
+    run_docker "$@"
+}
+
+if [ "${REQUEST_METHOD:-GET}" = POST ]; then
+    body=$(read_body)
+    action=$(field action)
+    case "$action" in
+        daemon_start|daemon_stop|daemon_restart)
+            command -v rc-service >/dev/null 2>&1 || fail "OpenRC service control is unavailable"
+            service_action=${action#daemon_}
+            result=$(rc-service docker "$service_action" 2>&1) || fail "$result"
+            printf '{"state":"ok","action":"%s"}\n' "$action"
+            exit 0
+            ;;
+    esac
+    docker_ready || fail "Docker daemon is unavailable"
+    case "$action" in
+        pull)
+            image=$(field image)
+            valid_object "$image" || fail "invalid image reference"
+            run_docker pull "$image"
+            printf '{"state":"ok","action":"pull","image":"%s"}\n' "$(printf '%s' "$image" | json_escape)"
+            ;;
+        start|stop|restart|pause|unpause|kill|remove)
+            id=$(field id)
+            valid_object "$id" || fail "invalid container id"
+            case "$action" in
+                start) run_docker start "$id" ;;
+                stop) run_docker stop "$id" ;;
+                restart) run_docker restart "$id" ;;
+                pause) run_docker pause "$id" ;;
+                unpause) run_docker unpause "$id" ;;
+                kill) run_docker kill "$id" ;;
+                remove) run_docker rm "$id" ;;
+            esac
+            printf '{"state":"ok","action":"%s","id":"%s"}\n' "$action" "$(printf '%s' "$id" | json_escape)"
+            ;;
+        create)
+            create_from_body
+            id=$(printf '%s' "$output" | tail -n 1)
+            start_after=$(boolean_field start_after)
+            [ "$start_after" != true ] || run_docker start "$id"
+            printf '{"state":"ok","action":"create","id":"%s"}\n' "$(printf '%s' "$id" | json_escape)"
+            ;;
+        recreate)
+            id=$(field id)
+            valid_object "$id" || fail "invalid container id"
+            was_running=$(docker inspect --format '{{.State.Running}}' "$id" 2>/dev/null)
+            old_name=$(docker inspect --format '{{.Name}}' "$id" 2>/dev/null); old_name=${old_name#/}
+            valid_object "$old_name" || fail "unable to read the existing container name"
+            backup_name="${old_name}.strata-backup-$$"
+            if [ "$was_running" = true ]; then run_docker stop "$id"; fi
+            run_docker rename "$id" "$backup_name"
+            recreate_old_id=$id
+            recreate_old_name=$old_name
+            recreate_was_running=$was_running
+            recreate_new_id=
+            trap rollback_recreate EXIT INT TERM
+            create_from_body
+            new_id=$(printf '%s' "$output" | tail -n 1)
+            recreate_new_id=$new_id
+            start_after=$(boolean_field start_after)
+            if [ "$was_running" = true ] || [ "$start_after" = true ]; then
+                run_docker start "$new_id"
+            fi
+            run_docker rm "$id"
+            recreate_old_id=
+            trap - EXIT INT TERM
+            printf '{"state":"ok","action":"recreate","id":"%s"}\n' "$(printf '%s' "$new_id" | json_escape)"
+            ;;
+        update)
+            id=$(field id)
+            valid_object "$id" || fail "invalid container id"
+            set --
+            restart=$(field restart); [ -z "$restart" ] || set -- "$@" --restart "$restart"
+            memory=$(field memory); [ -z "$memory" ] || set -- "$@" --memory "$memory"
+            cpus=$(field cpus); [ -z "$cpus" ] || set -- "$@" --cpus "$cpus"
+            [ $# -gt 0 ] || fail "no updatable parameters were supplied"
+            run_docker update "$@" "$id"
+            printf '{"state":"ok","action":"update","id":"%s"}\n' "$(printf '%s' "$id" | json_escape)"
+            ;;
+        image_remove)
+            id=$(field id); valid_object "$id" || fail "invalid image id"
+            run_docker image rm "$id"
+            printf '{"state":"ok","action":"image_remove","id":"%s"}\n' "$(printf '%s' "$id" | json_escape)"
+            ;;
+        network_create|volume_create)
+            name=$(field name); valid_object "$name" || fail "invalid name"
+            if [ "$action" = network_create ]; then run_docker network create "$name"
+            else run_docker volume create "$name"; fi
+            printf '{"state":"ok","action":"%s","name":"%s"}\n' "$action" "$(printf '%s' "$name" | json_escape)"
+            ;;
+        network_remove|volume_remove)
+            id=$(field id); valid_object "$id" || fail "invalid object id"
+            if [ "$action" = network_remove ]; then run_docker network rm "$id"
+            else run_docker volume rm "$id"; fi
+            printf '{"state":"ok","action":"%s","id":"%s"}\n' "$action" "$(printf '%s' "$id" | json_escape)"
+            ;;
+        *) fail "invalid action" ;;
+    esac
+    exit 0
+fi
+
+if [ "${REQUEST_METHOD:-GET}" = GET ] && [ -n "${QUERY_STRING:-}" ]; then
+    case "$QUERY_STRING" in
+        inspect=*)
+            id=${QUERY_STRING#inspect=}
+            valid_object "$id" || fail "invalid container id"
+            docker_ready || fail "Docker daemon is unavailable"
+            fmt='IMAGE {{.Config.Image}}
+NAME {{.Name}}
+HOSTNAME {{.Config.Hostname}}
+DOMAINNAME {{.Config.Domainname}}
+RESTART {{.HostConfig.RestartPolicy.Name}}
+NETWORK {{.HostConfig.NetworkMode}}
+IPADDRESS {{.NetworkSettings.IPAddress}}
+MACADDRESS {{.NetworkSettings.MacAddress}}
+WORKDIR {{.Config.WorkingDir}}
+USER {{.Config.User}}
+ENTRYPOINT {{range $i,$e := .Config.Entrypoint}}{{if $i}} {{end}}{{$e}}{{end}}
+MEMORY {{.HostConfig.Memory}}
+MEMORYSWAP {{.HostConfig.MemorySwap}}
+NANOCPUS {{.HostConfig.NanoCpus}}
+CPUSETCPUS {{.HostConfig.CpusetCpus}}
+PIDSLIMIT {{.HostConfig.PidsLimit}}
+SHMSIZE {{.HostConfig.ShmSize}}
+PRIVILEGED {{.HostConfig.Privileged}}
+AUTOREMOVE {{.HostConfig.AutoRemove}}
+STDINOPEN {{.Config.OpenStdin}}
+TTY {{.Config.Tty}}
+READONLY {{.HostConfig.ReadonlyRootfs}}
+INIT {{if .HostConfig.Init}}{{.HostConfig.Init}}{{else}}false{{end}}
+PUBLISHALL {{.HostConfig.PublishAllPorts}}
+RUNNING {{.State.Running}}
+ENVS {{range $e := .Config.Env}}{{$e}},{{end}}
+CAPADD {{range $e := .HostConfig.CapAdd}}{{$e}},{{end}}
+CAPDROP {{range $e := .HostConfig.CapDrop}}{{$e}},{{end}}
+SECURITYOPT {{range $e := .HostConfig.SecurityOpt}}{{$e}},{{end}}
+DNS {{range $e := .HostConfig.Dns}}{{$e}},{{end}}
+DNSSEARCH {{range $e := .HostConfig.DnsSearch}}{{$e}},{{end}}
+EXTRAHOSTS {{range $e := .HostConfig.ExtraHosts}}{{$e}},{{end}}
+DEVICES {{range .HostConfig.Devices}}{{.PathOnHost}}:{{.PathInContainer}}:{{.CgroupPermissions}},{{end}}
+LABELS {{range $k,$v := .Config.Labels}}{{$k}}={{$v}},{{end}}
+SYSCTLS {{range $k,$v := .HostConfig.Sysctls}}{{$k}}={{$v}},{{end}}
+TMPFS {{range $k,$v := .HostConfig.Tmpfs}}{{$k}}:{{$v}},{{end}}
+GROUPADD {{range $e := .HostConfig.GroupAdd}}{{$e}},{{end}}
+STOPSIGNAL {{.Config.StopSignal}}
+STOPTIMEOUT {{if .Config.StopTimeout}}{{.Config.StopTimeout}}{{end}}
+HEALTHCMD {{if .Config.Healthcheck}}{{range $i,$e := .Config.Healthcheck.Test}}{{if $i}} {{end}}{{$e}}{{end}}{{end}}
+HEALTHINTERVAL {{if .Config.Healthcheck}}{{.Config.Healthcheck.Interval}}{{end}}
+HEALTHTIMEOUT {{if .Config.Healthcheck}}{{.Config.Healthcheck.Timeout}}{{end}}
+HEALTHSTARTPERIOD {{if .Config.Healthcheck}}{{.Config.Healthcheck.StartPeriod}}{{end}}
+HEALTHRETRIES {{if .Config.Healthcheck}}{{.Config.Healthcheck.Retries}}{{end}}
+COMMAND {{range $i,$c := .Config.Cmd}}{{if $i}} {{end}}{{$c}}{{end}}
+PORTS {{range $p,$binds := .HostConfig.PortBindings}}{{range $binds}}{{.HostPort}}:{{$p}},{{end}}{{end}}
+VOLUMES {{range .Mounts}}{{if eq .Type "bind"}}{{.Source}}:{{.Destination}}{{else}}{{.Name}}:{{.Destination}}{{end}},{{end}}'
+            result=$(docker inspect --format "$fmt" "$id" 2>&1) || fail "$result"
+            printf '{'
+            first=yes
+            printf '%s\n' "$result" | while IFS= read -r line; do
+                key=${line%% *}
+                value=${line#* }
+                [ "$key" != "$value" ] || value=""
+                case "$key" in
+                    NAME) value=${value#/} ;;
+                    ENVS|CAPADD|CAPDROP|SECURITYOPT|DNS|DNSSEARCH|EXTRAHOSTS|DEVICES|LABELS|SYSCTLS|TMPFS|GROUPADD|PORTS|VOLUMES) value=${value%,} ;;
+                esac
+                case "$key" in
+                    IMAGE) jkey=image; jtype=string ;;
+                    NAME) jkey=name; jtype=string ;;
+                    HOSTNAME) jkey=hostname; jtype=string ;;
+                    DOMAINNAME) jkey=domainname; jtype=string ;;
+                    RESTART) jkey=restart; jtype=string ;;
+                    NETWORK) jkey=network; jtype=string ;;
+                    IPADDRESS) jkey=ip_address; jtype=string ;;
+                    MACADDRESS) jkey=mac_address; jtype=string ;;
+                    WORKDIR) jkey=workdir; jtype=string ;;
+                    USER) jkey=user; jtype=string ;;
+                    ENTRYPOINT) jkey=entrypoint; jtype=string ;;
+                    MEMORY) jkey=memory; jtype=number; case "$value" in ''|*[!0-9]*) value=0 ;; esac ;;
+                    MEMORYSWAP) jkey=memory_swap; jtype=number; case "$value" in ''|*[!0-9-]*) value=0 ;; esac ;;
+                    NANOCPUS) jkey=cpus; jtype=cpus ;;
+                    CPUSETCPUS) jkey=cpuset_cpus; jtype=string ;;
+                    PIDSLIMIT) jkey=pids_limit; jtype=number; case "$value" in ''|*[!0-9-]*) value=0 ;; esac ;;
+                    SHMSIZE) jkey=shm_size; jtype=number; case "$value" in ''|*[!0-9]*) value=0 ;; esac ;;
+                    PRIVILEGED) jkey=privileged; jtype=bool ;;
+                    AUTOREMOVE) jkey=auto_remove; jtype=bool ;;
+                    STDINOPEN) jkey=stdin_open; jtype=bool ;;
+                    TTY) jkey=tty; jtype=bool ;;
+                    READONLY) jkey=readonly; jtype=bool ;;
+                    INIT) jkey=init_process; jtype=bool ;;
+                    PUBLISHALL) jkey=publish_all; jtype=bool ;;
+                    RUNNING) jkey=running; jtype=bool ;;
+                    ENVS) jkey=envs; jtype=string ;;
+                    CAPADD) jkey=cap_add; jtype=string ;;
+                    CAPDROP) jkey=cap_drop; jtype=string ;;
+                    SECURITYOPT) jkey=security_opt; jtype=string ;;
+                    DNS) jkey=dns; jtype=string ;;
+                    DNSSEARCH) jkey=dns_search; jtype=string ;;
+                    EXTRAHOSTS) jkey=extra_hosts; jtype=string ;;
+                    DEVICES) jkey=devices; jtype=string ;;
+                    LABELS) jkey=labels; jtype=string ;;
+                    SYSCTLS) jkey=sysctls; jtype=string ;;
+                    TMPFS) jkey=tmpfs; jtype=string ;;
+                    GROUPADD) jkey=group_add; jtype=string ;;
+                    STOPSIGNAL) jkey=stop_signal; jtype=string ;;
+                    STOPTIMEOUT) jkey=stop_timeout; jtype=number; case "$value" in ''|*[!0-9]*) value=0 ;; esac ;;
+                    HEALTHCMD) jkey=health_cmd; jtype=string; value=${value#CMD-SHELL }; value=${value#CMD } ;;
+                    HEALTHINTERVAL) jkey=health_interval; jtype=duration ;;
+                    HEALTHTIMEOUT) jkey=health_timeout; jtype=duration ;;
+                    HEALTHSTARTPERIOD) jkey=health_start_period; jtype=duration ;;
+                    HEALTHRETRIES) jkey=health_retries; jtype=number; case "$value" in ''|*[!0-9]*) value=0 ;; esac ;;
+                    COMMAND) jkey=command; jtype=string ;;
+                    PORTS) jkey=ports; jtype=string ;;
+                    VOLUMES) jkey=volumes; jtype=string ;;
+                    *) continue ;;
+                esac
+                [ "$first" = yes ] || printf ','
+                first=no
+                case "$jtype" in
+                    string) printf '"%s":"%s"' "$jkey" "$(printf '%s' "$value" | json_escape)" ;;
+                    bool) [ "$value" = true ] && bv=true || bv=false; printf '"%s":%s' "$jkey" "$bv" ;;
+                    number) printf '"%s":%s' "$jkey" "${value:-0}" ;;
+                    cpus)
+                        case "$value" in ''|*[!0-9]*) value=0 ;; esac
+                        cpus_value=$(awk -v n="$value" 'BEGIN { printf "%.2f", n / 1000000000 }')
+                        printf '"%s":%s' "$jkey" "$cpus_value"
+                        ;;
+                    duration)
+                        case "$value" in ''|0|*[!0-9]*) duration_value="" ;; *) duration_value="${value}ns" ;; esac
+                        printf '"%s":"%s"' "$jkey" "$duration_value"
+                        ;;
+                esac
+            done
+            printf '}\n'
+            exit 0
+            ;;
+    esac
+fi
+
+if ! command -v docker >/dev/null 2>&1; then
+    printf '{"installed":false,"available":false,"containers":[],"image_list":[],"mirrors":[]}\n'
+    exit 0
+fi
+if ! docker info >/dev/null 2>&1; then
+    printf '{"installed":true,"available":false,"containers":[],"image_list":[],"mirrors":[]}\n'
+    exit 0
+fi
+version=$(docker version --format '{{.Server.Version}}' 2>/dev/null | json_escape)
+driver=$(docker info --format '{{.Driver}}' 2>/dev/null | json_escape)
+containers=$(docker info --format '{{.Containers}}' 2>/dev/null)
+running=$(docker info --format '{{.ContainersRunning}}' 2>/dev/null)
+paused=$(docker info --format '{{.ContainersPaused}}' 2>/dev/null)
+stopped=$(docker info --format '{{.ContainersStopped}}' 2>/dev/null)
+images=$(docker info --format '{{.Images}}' 2>/dev/null)
+printf '{"installed":true,"available":true,"version":"%s","driver":"%s","container_count":%s,"running":%s,"paused":%s,"stopped":%s,"images":%s,"containers":[' \
+    "$version" "$driver" "${containers:-0}" "${running:-0}" "${paused:-0}" "${stopped:-0}" "${images:-0}"
+first=yes
+docker ps -a --no-trunc --format '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.State}}' 2>/dev/null | while IFS="$(printf '\t')" read -r id name image status state; do
+    [ -n "$id" ] || continue
+    [ "$first" = yes ] || printf ','; first=no
+    printf '{"id":"%s","name":"%s","image":"%s","status":"%s","state":"%s"}' \
+        "$(printf '%s' "$id" | json_escape)" "$(printf '%s' "$name" | json_escape)" \
+        "$(printf '%s' "$image" | json_escape)" "$(printf '%s' "$status" | json_escape)" \
+        "$(printf '%s' "$state" | json_escape)"
+done
+printf '],"image_list":['
+first=yes
+docker image ls --no-trunc --format '{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}' 2>/dev/null | while IFS="$(printf '\t')" read -r id repository tag size created; do
+    [ -n "$id" ] || continue
+    [ "$first" = yes ] || printf ','; first=no
+    printf '{"id":"%s","repository":"%s","tag":"%s","size":"%s","created":"%s"}' \
+        "$(printf '%s' "$id" | json_escape)" "$(printf '%s' "$repository" | json_escape)" \
+        "$(printf '%s' "$tag" | json_escape)" "$(printf '%s' "$size" | json_escape)" \
+        "$(printf '%s' "$created" | json_escape)"
+done
+printf '],"mirrors":['
+first=yes
+for mirror in $(docker info --format '{{range .RegistryConfig.Mirrors}}{{println .}}{{end}}' 2>/dev/null); do
+    [ "$first" = yes ] || printf ','; first=no
+    printf '"%s"' "$(printf '%s' "$mirror" | json_escape)"
+done
+printf '],"networks":['
+first=yes
+docker network ls --format '{{.ID}}\t{{.Name}}\t{{.Driver}}\t{{.Scope}}' 2>/dev/null | while IFS="$(printf '\t')" read -r id name network_driver scope; do
+    [ -n "$id" ] || continue
+    [ "$first" = yes ] || printf ','; first=no
+    printf '{"id":"%s","name":"%s","driver":"%s","scope":"%s"}' \
+        "$(printf '%s' "$id" | json_escape)" "$(printf '%s' "$name" | json_escape)" \
+        "$(printf '%s' "$network_driver" | json_escape)" "$(printf '%s' "$scope" | json_escape)"
+done
+printf '],"volumes":['
+first=yes
+docker volume ls --format '{{.Name}}\t{{.Driver}}\t{{.Scope}}' 2>/dev/null | while IFS="$(printf '\t')" read -r name volume_driver scope; do
+    [ -n "$name" ] || continue
+    [ "$first" = yes ] || printf ','; first=no
+    printf '{"name":"%s","driver":"%s","scope":"%s"}' \
+        "$(printf '%s' "$name" | json_escape)" "$(printf '%s' "$volume_driver" | json_escape)" \
+        "$(printf '%s' "$scope" | json_escape)"
+done
+printf ']}\n'

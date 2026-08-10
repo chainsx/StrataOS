@@ -1,0 +1,10 @@
+name = "host-ncurses"
+version = "6.5"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--prefix={host}/libexec/host-ncurses", "--with-shared", "--without-normal", "--without-debug", "--without-cxx", "--without-cxx-binding", "--without-ada", "--without-manpages", "--without-tests", "--enable-widec", "--disable-db-install", "--with-progs"]
+environment = ["LDFLAGS=-fuse-ld=lld -Wl,-z,relro,-z,now -Wl,-rpath,{host}/libexec/host-ncurses/lib"]
+
+[source]
+url = "https://invisible-mirror.net/archives/ncurses/ncurses-{version}.tar.gz"

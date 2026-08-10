@@ -1,0 +1,4 @@
+#!/sbin/openrc-run
+description="Mount procfs"
+depend() { before *; }
+start() { mountpoint -q /proc || mount -t proc -o nosuid,noexec,nodev proc /proc; }

@@ -1,0 +1,11 @@
+--- a/support/shobj-conf
++++ b/support/shobj-conf
+@@ -42,7 +42,7 @@ SHOBJ_XLDFLAGS=
+ SHOBJ_LIBS=
+ 
+ SHLIB_XLDFLAGS=
+-SHLIB_LIBS=
++SHLIB_LIBS='$(TERMCAP_LIB)'
+ 
+ SHLIB_DOT='.'
+ SHLIB_LIBPREF='lib'

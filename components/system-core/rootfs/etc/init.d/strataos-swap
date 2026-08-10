@@ -1,0 +1,40 @@
+#!/sbin/openrc-run
+
+description="Activate zram first and persistent swap as fallback"
+swap_file=/state/swap/strata.swap
+zram_device=/dev/zram0
+zram_priority=100
+disk_priority=10
+
+depend() {
+    need localmount strataos-storage
+    before docker strata-webui
+}
+
+start() {
+    ebegin "Activating StrataOS swap"
+    rc=0
+    memory_kib=$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)
+    # Automatically use compressed RAM swap on systems with at most 4 GiB.
+    # Size is half of RAM, capped at 2 GiB. Disk swap remains lower priority.
+    if [ "${memory_kib:-0}" -gt 0 ] && [ "$memory_kib" -le 4194304 ] && [ -e /sys/block/zram0/disksize ]; then
+        size_kib=$((memory_kib / 2)); [ "$size_kib" -le 2097152 ] || size_kib=2097152
+        echo 1 > /sys/block/zram0/reset 2>/dev/null || true
+        echo $((size_kib * 1024)) > /sys/block/zram0/disksize 2>/dev/null && \
+            mkswap "$zram_device" >/dev/null 2>&1 && swapon -p "$zram_priority" "$zram_device" || rc=1
+    fi
+    if [ -f "$swap_file" ]; then
+        swapon -p "$disk_priority" "$swap_file" || rc=1
+    fi
+    eend "$rc"
+    return "$rc"
+}
+
+stop() {
+    ebegin "Deactivating StrataOS swap"
+    rc=0
+    swapoff "$swap_file" 2>/dev/null || true
+    swapoff "$zram_device" 2>/dev/null || true
+    [ ! -e /sys/block/zram0/reset ] || echo 1 > /sys/block/zram0/reset 2>/dev/null || rc=1
+    eend "$rc"
+}

@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+
+name="StrataOS network"
+description="Auto-detect interfaces and configure via DHCP"
+command="/sbin/dhcpcd"
+command_args="-q -b"
+# The manager instance uses dhcpcd's compiled PIDFILE template with empty
+# interface fields, which resolves to /run/pid.
+pidfile="/run/pid"
+
+depend() {
+    need localmount
+    after udev-settle
+    provide net
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /run/dhcpcd
+    [ ! -x /usr/libexec/strataos/network-devices ] || /usr/libexec/strataos/network-devices
+}
+
+start_post() {
+    if [ -s /etc/ppp/peers/strata-wan ] && ! pgrep -x pppd >/dev/null 2>&1; then
+        pppd call strata-wan >/var/log/strataos-pppoe.log 2>&1 &
+    fi
+}
+
+stop_post() {
+    pkill -x pppd 2>/dev/null || true
+}

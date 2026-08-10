@@ -1,0 +1,13 @@
+{
+  "data-root": "/var/lib/docker",
+  "storage-driver": "overlay2",
+  "log-driver": "local",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "iptables": false,
+  "ip6tables": false,
+  "bridge": "none",
+  "registry-mirrors": []
+}

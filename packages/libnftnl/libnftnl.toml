@@ -1,0 +1,10 @@
+name = "libnftnl"
+version = "1.2.9"
+kind = "target"
+build_system = "autotools"
+dependencies = ["libmnl"]
+configure_args = ["--disable-static", "--enable-shared"]
+
+[source]
+url = "https://www.netfilter.org/projects/libnftnl/files/libnftnl-{version}.tar.xz"
+sha256 = "e8c216255e129f26270639fee7775265665a31b11aa920253c3e5d5d62dfc4b8"

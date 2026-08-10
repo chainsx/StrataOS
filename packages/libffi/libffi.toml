@@ -1,0 +1,9 @@
+name = "libffi"
+version = "3.4.8"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--disable-static", "--enable-shared", "--disable-docs"]
+
+[source]
+url = "https://github.com/libffi/libffi/releases/download/v{version}/libffi-{version}.tar.gz"

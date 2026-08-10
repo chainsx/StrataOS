@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+description="Set hostname"
+depend() { need procfs; before net; }
+start() {
+    name="$(cat /etc/hostname 2>/dev/null || printf strataos)"
+    hostname "$name"
+}

@@ -1,0 +1,10 @@
+name = "host-squashfs-tools"
+version = "4.7.3"
+kind = "host"
+build_system = "special"
+special = "squashfs-tools"
+dependencies = ["host-zlib", "host-zstd"]
+build_args = ["GZIP_SUPPORT=1", "ZSTD_SUPPORT=1", "XZ_SUPPORT=0", "LZO_SUPPORT=0", "LZ4_SUPPORT=0"]
+
+[source]
+url = "https://github.com/plougher/squashfs-tools/archive/refs/tags/{version}.tar.gz"

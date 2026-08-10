@@ -1,0 +1,6 @@
+#!/sbin/openrc-run
+description="Mount sysfs"
+depend() { before *; }
+start() {
+    mountpoint -q /sys || mount -t sysfs -o nosuid,noexec,nodev sysfs /sys
+}

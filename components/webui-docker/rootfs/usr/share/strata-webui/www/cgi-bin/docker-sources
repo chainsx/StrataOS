@@ -1,0 +1,57 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+fail() { printf '{"error":"%s"}\n' "$(printf '%s' "$1" | json_escape)"; exit 0; }
+valid_url() {
+    case "$1" in http://*|https://*) ;; *) return 1 ;; esac
+    case "$1" in *[!A-Za-z0-9:/?\&=._~%+@,-]*) return 1 ;; esac
+}
+config=/etc/docker/registry-mirrors.list
+
+case "${REQUEST_METHOD:-GET}" in
+    GET) ;;
+    POST)
+        length=${CONTENT_LENGTH:-0}
+        case "$length" in ''|*[!0-9]*) fail "invalid content length" ;; esac
+        [ "$length" -le 4096 ] || fail "request body too large"
+        body=$(dd bs=1 count="$length" 2>/dev/null)
+        action=$(printf '%s' "$body" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([A-Za-z-]*\)".*/\1/p')
+        url=$(printf '%s' "$body" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')
+        old_url=$(printf '%s' "$body" | sed -n 's/.*"old_url"[[:space:]]*:[[:space:]]*"\([^"\\]*\)".*/\1/p')
+        [ -f "$config" ] || : > "$config"
+        case "$action" in
+            save)
+                valid_url "$url" || fail "mirror must be a valid HTTP or HTTPS URL"
+                temporary=$config.tmp.$$
+                if [ -n "$old_url" ]; then grep -vxF "$old_url" "$config" > "$temporary" || true
+                else cp "$config" "$temporary"; fi
+                grep -qxF "$url" "$temporary" || printf '%s\n' "$url" >> "$temporary"
+                mv "$temporary" "$config"
+                ;;
+            delete)
+                valid_url "$url" || fail "invalid mirror URL"
+                temporary=$config.tmp.$$
+                grep -vxF "$url" "$config" > "$temporary" || true
+                mv "$temporary" "$config"
+                ;;
+            *) fail "invalid action" ;;
+        esac
+        /usr/libexec/strataos/web-docker-config || fail "unable to update Docker configuration"
+        if command -v rc-service >/dev/null 2>&1; then
+            result=$(rc-service docker restart 2>&1) || fail "$result"
+        fi
+        ;;
+    *) fail "method not allowed" ;;
+esac
+
+printf '{"mirrors":['
+first=yes
+while IFS= read -r mirror; do
+    case "$mirror" in ''|'#'*) continue ;; esac
+    [ "$first" = yes ] || printf ','; first=no
+    printf '"%s"' "$(printf '%s' "$mirror" | json_escape)"
+done < "$config" 2>/dev/null
+printf ']}\n'

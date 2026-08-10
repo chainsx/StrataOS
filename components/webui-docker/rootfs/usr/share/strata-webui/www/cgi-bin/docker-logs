@@ -1,0 +1,21 @@
+#!/bin/sh
+# Owned by the webui-docker capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+fail() { printf '{"error":"%s"}\n' "$(printf '%s' "$1" | json_escape)"; exit 0; }
+valid_id() { case "$1" in ''|-*|*[!A-Za-z0-9_.-]*) return 1 ;; esac; }
+
+[ "${REQUEST_METHOD:-GET}" = POST ] || fail "method not allowed"
+length=${CONTENT_LENGTH:-0}
+case "$length" in ''|*[!0-9]*) fail "invalid content length" ;; esac
+[ "$length" -le 4096 ] || fail "request body too large"
+body=$(dd bs=1 count="$length" 2>/dev/null)
+id=$(printf '%s' "$body" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_.-]*\)".*/\1/p')
+valid_id "$id" || fail "invalid container id"
+docker inspect "$id" >/dev/null 2>&1 || fail "container does not exist"
+logs=$(docker logs --tail 500 --timestamps "$id" 2>&1 | tail -c 262144 |
+    LC_ALL=C tr -d '\000-\010\013\014\016-\037\177')
+printf '{"id":"%s","logs":"%s"}\n' \
+    "$(printf '%s' "$id" | json_escape)" "$(printf '%s' "$logs" | json_escape)"

@@ -1,0 +1,6 @@
+name = "llvm-runtime"
+version = "22.1.8"
+kind = "target"
+build_system = "special"
+special = "llvm-runtime"
+dependencies = ["musl-runtime"]

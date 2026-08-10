@@ -1,0 +1,9 @@
+name = "xz"
+version = "5.8.1"
+kind = "target"
+build_system = "cmake"
+dependencies = []
+configure_args = ["-DBUILD_SHARED_LIBS=ON", "-DXZ_TOOL_XZ=ON", "-DXZ_TOOL_XZDEC=OFF", "-DXZ_TOOL_LZMADEC=OFF", "-DXZ_TOOL_LZMAINFO=OFF", "-DXZ_NLS=OFF", "-DXZ_DOC=OFF"]
+
+[source]
+url = "https://github.com/tukaani-project/xz/releases/download/v{version}/xz-{version}.tar.xz"

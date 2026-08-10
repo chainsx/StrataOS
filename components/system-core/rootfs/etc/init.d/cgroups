@@ -1,0 +1,7 @@
+#!/sbin/openrc-run
+description="Mount unified cgroup hierarchy"
+depend() { need sysfs; before docker; }
+start() {
+    mkdir -p /sys/fs/cgroup
+    mountpoint -q /sys/fs/cgroup || mount -t cgroup2 -o nosuid,nodev,noexec cgroup2 /sys/fs/cgroup
+}

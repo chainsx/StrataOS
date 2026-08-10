@@ -1,0 +1,11 @@
+name = "argon2"
+version = "20190702"
+kind = "target"
+build_system = "special"
+special = "argon2"
+dependencies = []
+build_args = ["LIBRARY_REL=lib"]
+install_args = ["PREFIX=/usr", "LIBRARY_REL=lib"]
+
+[source]
+url = "https://github.com/P-H-C/phc-winner-argon2/archive/refs/tags/{version}.tar.gz"

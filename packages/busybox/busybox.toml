@@ -1,0 +1,10 @@
+name = "busybox"
+version = "1.37.0"
+kind = "target"
+build_system = "special"
+special = "busybox"
+dependencies = ["musl-runtime"]
+install_args = ["LDFLAGS="]
+
+[source]
+url = "https://busybox.net/downloads/busybox-{version}.tar.bz2"

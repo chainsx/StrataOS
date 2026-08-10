@@ -1,0 +1,10 @@
+name = "libassuan"
+version = "3.0.2"
+kind = "target"
+build_system = "autotools"
+dependencies = ["libgpg-error"]
+configure_args = ["--disable-static", "--enable-shared", "--disable-doc"]
+environment = ["GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config"]
+
+[source]
+url = "https://gnupg.org/ftp/gcrypt/libassuan/libassuan-{version}.tar.bz2"

@@ -1,0 +1,10 @@
+name = "host-ninja"
+version = "1.13.1"
+kind = "host"
+build_system = "special"
+special = "ninja"
+dependencies = []
+configure_args = ["-DCMAKE_BUILD_TYPE=Release"]
+
+[source]
+url = "https://github.com/ninja-build/ninja/archive/refs/tags/v{version}.tar.gz"

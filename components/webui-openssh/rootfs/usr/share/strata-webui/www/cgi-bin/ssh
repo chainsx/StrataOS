@@ -1,0 +1,83 @@
+#!/bin/sh
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+escape() { printf '%s' "$1" | json_escape; }
+SSHD_CONF=/etc/ssh/sshd_config.d/10-strataos.conf
+
+ssh_config_info() {
+    available=false enabled=false running=false
+    if [ -x /usr/sbin/sshd ] && [ -f /etc/init.d/sshd ]; then
+        available=true
+        rc-update show default 2>/dev/null | grep -q '[[:space:]]sshd[[:space:]]' && enabled=true
+        rc-service sshd status >/dev/null 2>&1 && running=true
+    fi
+    port=$(awk '/^Port[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || awk '/^#Port[[:space:]]/ {print $2; exit}' /etc/ssh/sshd_config 2>/dev/null || echo 22)
+    permit_root=$(awk '/^PermitRootLogin[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo yes)
+    password_auth=$(awk '/^PasswordAuthentication[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo yes)
+    tcp_forward=$(awk '/^AllowTcpForwarding[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo yes)
+    max_auth=$(awk '/^MaxAuthTries[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo 6)
+    idle_interval=$(awk '/^ClientAliveInterval[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo 0)
+    idle_count=$(awk '/^ClientAliveCountMax[[:space:]]/ {print $2; exit}' "$SSHD_CONF" 2>/dev/null || echo 3)
+    printf '{"available":%s,"enabled":%s,"running":%s,"port":"%s","permit_root_login":"%s","password_auth":"%s","tcp_forwarding":"%s","max_auth_tries":%s,"client_alive_interval":%s,"client_alive_count_max":%s}\n' \
+        "$available" "$enabled" "$running" "$(escape "$port")" "$(escape "$permit_root")" "$(escape "$password_auth")" "$(escape "$tcp_forward")" \
+        "${max_auth:-6}" "${idle_interval:-0}" "${idle_count:-3}"
+}
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+    ssh_config_info
+    exit 0
+fi
+
+body=$(read_body)
+action=$(printf '%s' "$body" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+case "$action" in
+    ssh_service)
+        requested=$(printf '%s' "$body" | sed -n 's/.*"enabled"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+        case "$requested" in
+            true)
+                rc-update add sshd default >/dev/null 2>&1 || { printf '{"error":"failed to enable SSH at boot"}\n'; exit 0; }
+                result=$(rc-service sshd start 2>&1) || { rc-update del sshd default >/dev/null 2>&1 || true; printf '{"error":"%s"}\n' "$(escape "$result")"; exit 0; }
+                [ ! -f /etc/init.d/fail2ban ] || { rc-update add fail2ban default >/dev/null 2>&1 || true; rc-service fail2ban start >/dev/null 2>&1 || true; }
+                ;;
+            false)
+                [ ! -f /etc/init.d/fail2ban ] || { rc-service fail2ban stop >/dev/null 2>&1 || true; rc-update del fail2ban default >/dev/null 2>&1 || true; }
+                result=$(rc-service sshd stop 2>&1) || { printf '{"error":"%s"}\n' "$(escape "$result")"; exit 0; }
+                rc-update del sshd default >/dev/null 2>&1 || true
+                ;;
+            *) printf '{"error":"invalid SSH service state"}\n'; exit 0 ;;
+        esac
+        printf '{"success":true,"action":"ssh_service","enabled":%s}\n' "$requested"
+        ;;
+    ssh_config)
+        port=$(printf '%s' "$body" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*"\([0-9]*\)".*/\1/p')
+        permit_root=$(printf '%s' "$body" | sed -n 's/.*"permit_root_login"[[:space:]]*:[[:space:]]*"\([a-z-]*\)".*/\1/p')
+        password_auth=$(printf '%s' "$body" | sed -n 's/.*"password_auth"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+        tcp_fwd=$(printf '%s' "$body" | sed -n 's/.*"tcp_forwarding"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+        max_auth=$(printf '%s' "$body" | sed -n 's/.*"max_auth_tries"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        idle_interval=$(printf '%s' "$body" | sed -n 's/.*"client_alive_interval"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        idle_count=$(printf '%s' "$body" | sed -n 's/.*"client_alive_count_max"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        case "$port" in ''|*[!0-9]*) [ -z "$port" ] || { printf '{"error":"invalid SSH port"}\n'; exit 0; } ;; esac
+        [ -z "$port" ] || { [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; } || { printf '{"error":"invalid SSH port"}\n'; exit 0; }
+        mkdir -p /etc/ssh/sshd_config.d
+        {
+            [ -n "$port" ] && printf 'Port %s\n' "$port"
+            [ -n "$permit_root" ] && printf 'PermitRootLogin %s\n' "$permit_root"
+            [ -n "$password_auth" ] && printf 'PasswordAuthentication %s\n' "$password_auth"
+            [ -n "$tcp_fwd" ] && printf 'AllowTcpForwarding %s\n' "$tcp_fwd"
+            [ -n "$max_auth" ] && printf 'MaxAuthTries %s\n' "$max_auth"
+            [ -n "$idle_interval" ] && printf 'ClientAliveInterval %s\n' "$idle_interval"
+            [ -n "$idle_count" ] && printf 'ClientAliveCountMax %s\n' "$idle_count"
+            printf 'HostKey /var/lib/strataos/openssh/ssh_host_ed25519_key\nHostKey /var/lib/strataos/openssh/ssh_host_rsa_key\nUseDNS no\nX11Forwarding no\n'
+        } > "$SSHD_CONF.tmp"
+        if /usr/sbin/sshd -t -f "$SSHD_CONF.tmp" 2>/dev/null; then
+            mv "$SSHD_CONF.tmp" "$SSHD_CONF"
+            printf '{"success":true,"action":"ssh_config","restart_required":true}\n'
+        else
+            rm -f "$SSHD_CONF.tmp"
+            printf '{"error":"OpenSSH rejected the proposed configuration"}\n'
+        fi
+        ;;
+    *) printf '{"error":"invalid action: %s"}\n' "$(escape "$action")" ;;
+esac

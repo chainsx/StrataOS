@@ -1,0 +1,11 @@
+name = "zstd"
+version = "1.5.7"
+kind = "target"
+build_system = "special"
+special = "zstd"
+dependencies = []
+build_args = ["ZSTD_LEGACY_SUPPORT=0", "HAVE_THREAD=1"]
+install_args = ["PREFIX=/usr", "LIBDIR=/usr/lib", "INCLUDEDIR=/usr/include"]
+
+[source]
+url = "https://github.com/facebook/zstd/releases/download/v{version}/zstd-{version}.tar.gz"

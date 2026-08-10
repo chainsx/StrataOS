@@ -1,0 +1,10 @@
+name = "dhcpcd"
+version = "10.2.2"
+kind = "target"
+build_system = "special"
+special = "dhcpcd"
+dependencies = []
+configure_args = ["--prefix=/usr", "--sbindir=/sbin", "--sysconfdir=/etc", "--libexecdir=/lib/dhcpcd", "--dbdir=/var/lib/dhcpcd", "--rundir=/run", "--without-udev", "--without-privsep"]
+
+[source]
+url = "https://github.com/NetworkConfiguration/dhcpcd/archive/refs/tags/v{version}.tar.gz"

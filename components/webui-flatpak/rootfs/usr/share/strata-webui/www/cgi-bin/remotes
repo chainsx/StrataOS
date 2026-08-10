@@ -1,0 +1,100 @@
+#!/bin/sh
+# Owned by the webui-flatpak capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+valid_name() {
+    case "$1" in ''|-*|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac
+}
+
+valid_url() {
+    case "$1" in
+        http://*|https://*) ;;
+        *) return 1 ;;
+    esac
+    case "$1" in *[!A-Za-z0-9:/?\&=._~%+@,-]*) return 1 ;; esac
+    return 0
+}
+
+case "${REQUEST_METHOD:-GET}" in
+    GET)
+        printf '['
+        first=yes
+        flatpak remotes --system --show-disabled --columns=name,title,url,options 2>/dev/null |
+        while IFS="$(printf '\t')" read -r name title url options; do
+            [ -n "$name" ] || continue
+            [ "$first" = yes ] || printf ','
+            first=no
+            [ "$title" != - ] || title=
+            case ",$options," in *,disabled,*) enabled=false ;; *) enabled=true ;; esac
+            printf '{"name":"%s","title":"%s","url":"%s","enabled":%s}' \
+                "$(printf '%s' "$name" | json_escape)" "$(printf '%s' "$title" | json_escape)" \
+                "$(printf '%s' "$url" | json_escape)" "$enabled"
+        done
+        printf ']\n'
+        ;;
+    POST)
+        length=${CONTENT_LENGTH:-0}
+        case "$length" in ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0 ;; esac
+        [ "$length" -le 4096 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+        body=$(dd bs=1 count="$length" 2>/dev/null)
+        action=$(printf '%s' "$body" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([A-Za-z-]*\)".*/\1/p')
+        if [ "$action" = configure-default ]; then
+            result=$(flatpak remote-add --system --if-not-exists \
+                flathub https://flathub.org/repo/flathub.flatpakrepo 2>&1) || {
+                printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"
+                exit 0
+            }
+            printf '{"state":"ok","name":"flathub"}\n'
+            exit 0
+        fi
+        name=$(printf '%s' "$body" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+        url=$(printf '%s' "$body" | sed -n 's/.*"url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+        valid_name "$name" || { printf '{"error":"invalid remote name"}\n'; exit 0; }
+        case "$action" in
+            save)
+                valid_url "$url" || { printf '{"error":"remote URL must be a valid HTTP or HTTPS URL"}\n'; exit 0; }
+                exists=no
+                flatpak remotes --system --show-disabled --columns=name 2>/dev/null | grep -qxF "$name" && exists=yes
+                case "$url" in
+                  *.flatpakrepo)
+                    # A .flatpakrepo descriptor carries the remote's GPG key. Re-add an
+                    # existing remote so Flatpak imports that key instead of retaining a
+                    # keyless raw repository URL.
+                    [ "$exists" = no ] || flatpak remote-delete --system --force "$name" >/dev/null 2>&1 || {
+                        printf '{"error":"unable to replace existing remote"}\n'; exit 0;
+                    }
+                    result=$(flatpak remote-add --system --if-not-exists "$name" "$url" 2>&1) || {
+                        printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"; exit 0;
+                    }
+                    ;;
+                  *)
+                if [ "$exists" = yes ]; then
+                    result=$(flatpak remote-modify --system --url="$url" "$name" 2>&1) || {
+                        printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"; exit 0;
+                    }
+                else
+                    result=$(flatpak remote-add --system "$name" "$url" 2>&1) || {
+                        printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"; exit 0;
+                    }
+                fi
+                    ;;
+                esac
+                ;;
+            enable|disable)
+                result=$(flatpak remote-modify --system --"$action" "$name" 2>&1) || {
+                    printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"; exit 0;
+                }
+                ;;
+            delete)
+                result=$(flatpak remote-delete --system --force "$name" 2>&1) || {
+                    printf '{"error":"%s"}\n' "$(printf '%s' "$result" | json_escape)"; exit 0;
+                }
+                ;;
+            *) printf '{"error":"invalid action"}\n'; exit 0 ;;
+        esac
+        printf '{"state":"ok","name":"%s"}\n' "$(printf '%s' "$name" | json_escape)"
+        ;;
+    *) printf '{"error":"method not allowed"}\n' ;;
+esac

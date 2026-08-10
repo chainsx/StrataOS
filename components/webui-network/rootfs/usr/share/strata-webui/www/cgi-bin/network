@@ -1,0 +1,160 @@
+#!/bin/sh
+# Owned by the webui-network capability component.
+. /usr/libexec/strataos/webui-cgi-common
+require_auth
+json_headers
+
+CONF=/etc/strataos/network.conf
+NAT_RULESET=/etc/strataos/network-nat.nft
+PPPOE_PEER=/etc/ppp/peers/strata-wan
+NETWORKS_DIR=/etc/strataos/networks.d
+escape() { printf '%s' "$1" | json_escape; }
+kv_get() { awk -F= -v k="$2" '$1==k{sub(/^[^=]*=/,"");print;exit}' "$1" 2>/dev/null; }
+kv_set() {
+    file=$1 key=$2 value=$3 temporary=$1.kv.$$
+    mkdir -p "$(dirname "$file")"; [ -f "$file" ] || : > "$file"
+    awk -F= -v k="$key" -v v="$value" 'BEGIN{done=0}$1==k{if(!done)print k"="v;done=1;next}{print}END{if(!done)print k"="v}' "$file" > "$temporary" && mv "$temporary" "$file"
+}
+valid_iface() { [ -n "$1" ] && [ -d "/sys/class/net/$1" ]; }
+
+write_nat_rules() {
+    v4_mode=$(kv_get "$CONF" nat4_mode); v4_iface=$(kv_get "$CONF" nat4_interface)
+    v6_mode=$(kv_get "$CONF" nat6_mode); v6_iface=$(kv_get "$CONF" nat6_interface)
+    temporary=$NAT_RULESET.new.$$
+    {
+        printf 'table inet strata_nat {\n chain postrouting { type nat hook postrouting priority srcnat; policy accept;\n'
+        case "$v4_mode" in
+            masquerade) printf '  meta nfproto ipv4 oifname "%s" masquerade\n' "$v4_iface" ;;
+        esac
+        case "$v6_mode" in
+            masquerade) printf '  meta nfproto ipv6 oifname "%s" masquerade\n' "$v6_iface" ;;
+        esac
+        printf ' }\n}\n'
+    } > "$temporary"
+    nft -c -f "$temporary" >/dev/null 2>&1 || { rm -f "$temporary"; return 1; }
+    nft delete table inet strata_nat >/dev/null 2>&1 || true
+    nft -f "$temporary" || { rm -f "$temporary"; return 1; }
+    mv "$temporary" "$NAT_RULESET"
+}
+
+list_interfaces() {
+    comma=""; printf '"interfaces":['
+    for path in /sys/class/net/*; do
+        [ -d "$path" ] || continue; iface=${path##*/}; [ "$iface" = lo ] && continue
+        kind=ethernet
+        [ -d "$path/bridge" ] && kind=bridge
+        [ -d "$path/bonding" ] && kind=bond
+        [ -f "/proc/net/vlan/$iface" ] && kind=vlan
+        [ -f "$NETWORKS_DIR/$iface.conf" ] && kind=$(kv_get "$NETWORKS_DIR/$iface.conf" type)
+        printf '%s{"name":"%s","type":"%s"' "$comma" "$(escape "$iface")" "$(escape "$kind")"
+        mac=$(cat "$path/address" 2>/dev/null || echo ""); state=$(cat "$path/operstate" 2>/dev/null || echo unknown)
+        speed=$(cat "$path/speed" 2>/dev/null || echo -1); rx=$(cat "$path/statistics/rx_bytes" 2>/dev/null || echo 0); tx=$(cat "$path/statistics/tx_bytes" 2>/dev/null || echo 0)
+        ipv4=$(ip -4 -o addr show "$iface" scope global 2>/dev/null | awk '{print $4}' | head -1)
+        ipv6=$(ip -6 -o addr show "$iface" scope global 2>/dev/null | awk '{print $4}' | head -1)
+        gateway=$(ip -4 route show default dev "$iface" 2>/dev/null | awk '{print $3}' | head -1)
+        gateway6=$(ip -6 route show default dev "$iface" 2>/dev/null | awk '{print $3}' | head -1)
+        printf ',"mac":"%s","state":"%s","speed":%s,"rx_bytes":%s,"tx_bytes":%s,"ipv4":"%s","ipv6":"%s","gateway":"%s","gateway6":"%s"}' \
+            "$(escape "$mac")" "$(escape "$state")" "${speed:--1}" "$rx" "$tx" "$(escape "$ipv4")" "$(escape "$ipv6")" "$(escape "$gateway")" "$(escape "$gateway6")"
+        comma=,
+    done
+    printf '],'
+}
+
+list_dns() {
+    printf '"dns":['; comma=""
+    awk '/^nameserver[[:space:]]/{print $2}' /etc/resolv.conf 2>/dev/null | while read -r ns; do printf '%s"%s"' "$comma" "$(escape "$ns")"; comma=,; done
+    printf '],'
+}
+
+list_routes() {
+    printf '"routes":['; comma=""
+    for family in 4 6; do
+        route_file=/run/strata-routes-${family}.$$
+        ip -"$family" route show > "$route_file" 2>/dev/null || : > "$route_file"
+        while read -r line; do
+            dest=$(printf '%s\n' "$line" | awk '{print $1}'); gw=$(printf '%s\n' "$line" | awk '/via/{print $3}')
+            dev=$(printf '%s\n' "$line" | awk '{for(i=1;i<=NF;i++)if($i=="dev")print $(i+1)}')
+            printf '%s{"family":%s,"dest":"%s","gateway":"%s","device":"%s"}' "$comma" "$family" "$(escape "$dest")" "$(escape "$gw")" "$(escape "$dev")"; comma=,
+        done < "$route_file"
+        rm -f "$route_file"
+    done
+    printf ']'
+}
+
+if [ "${REQUEST_METHOD:-GET}" = GET ]; then
+    printf '{'; list_interfaces; list_dns; list_routes
+    pppoe_running=false; pgrep -x pppd >/dev/null 2>&1 && pppoe_running=true
+    printf ',"pppoe":{"configured":%s,"running":%s,"interface":"%s","username":"%s","ipv6":%s}' \
+        "$([ -f "$PPPOE_PEER" ] && echo true || echo false)" "$pppoe_running" "$(escape "$(kv_get "$CONF" pppoe_interface)")" "$(escape "$(kv_get "$CONF" pppoe_username)")" "$([ "$(kv_get "$CONF" pppoe_ipv6)" = yes ] && echo true || echo false)"
+    printf ',"nat":{"ipv4_mode":"%s","ipv4_interface":"%s","ipv6_mode":"%s","ipv6_interface":"%s"}}\n' \
+        "$(escape "$(kv_get "$CONF" nat4_mode)")" "$(escape "$(kv_get "$CONF" nat4_interface)")" "$(escape "$(kv_get "$CONF" nat6_mode)")" "$(escape "$(kv_get "$CONF" nat6_interface)")"
+    exit 0
+fi
+
+[ "${REQUEST_METHOD:-GET}" = POST ] || { printf '{"error":"method not allowed"}\n'; exit 0; }
+length=${CONTENT_LENGTH:-0}; case "$length" in ''|*[!0-9]*) printf '{"error":"invalid content length"}\n'; exit 0;; esac
+[ "$length" -le 8192 ] || { printf '{"error":"request body too large"}\n'; exit 0; }
+body=$(dd bs=1 count="$length" 2>/dev/null)
+action=$(printf '%s' "$body" | sed -n 's/.*"action"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9_-]*\)".*/\1/p')
+iface=$(printf '%s' "$body" | sed -n 's/.*"interface"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+
+case "$action" in
+    create_network)
+        device=$(printf '%s' "$body" | sed -n 's/.*"device"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+        type=$(printf '%s' "$body" | sed -n 's/.*"type"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+        parent=$(printf '%s' "$body" | sed -n 's/.*"parent"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._-]*\)".*/\1/p')
+        ports=$(printf '%s' "$body" | sed -n 's/.*"ports"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9._,-]*\)".*/\1/p')
+        vlan_id=$(printf '%s' "$body" | sed -n 's/.*"vlan_id"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p')
+        [ -n "$device" ] && [ ! -e "/sys/class/net/$device" ] || { printf '{"error":"invalid or existing device name"}\n'; exit 0; }
+        case "$type" in
+            bridge|dummy) : ;;
+            vlan) valid_iface "$parent" || { printf '{"error":"invalid VLAN parent"}\n'; exit 0; }; [ "${vlan_id:-0}" -ge 1 ] 2>/dev/null && [ "$vlan_id" -le 4094 ] || { printf '{"error":"VLAN ID must be 1-4094"}\n'; exit 0; } ;;
+            macvlan) valid_iface "$parent" || { printf '{"error":"invalid macvlan parent"}\n'; exit 0; } ;;
+            *) printf '{"error":"unsupported network type"}\n'; exit 0 ;;
+        esac
+        if [ "$type" = bridge ]; then
+            oldifs=$IFS; IFS=,
+            for port in $ports; do valid_iface "$port" || { IFS=$oldifs; printf '{"error":"invalid bridge port"}\n'; exit 0; }; [ "$port" != "$device" ] || { IFS=$oldifs; printf '{"error":"bridge cannot contain itself"}\n'; exit 0; }; done
+            IFS=$oldifs
+        fi
+        mkdir -p "$NETWORKS_DIR"; config="$NETWORKS_DIR/$device.conf"
+        { printf 'device=%s\ntype=%s\nparent=%s\nports=%s\nvlan_id=%s\n' "$device" "$type" "$parent" "$ports" "$vlan_id"; } > "$config"
+        if ! /usr/libexec/strataos/network-devices "$config"; then rm -f "$config"; printf '{"error":"failed to create network device"}\n'; exit 0; fi
+        printf '{"success":true,"action":"create_network","interface":"%s"}\n' "$(escape "$device")" ;;
+    apply_dhcp)
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }
+        ip -4 addr flush dev "$iface" 2>/dev/null || true; dhcpcd -4 -n "$iface" >/dev/null 2>&1 || true
+        printf '{"success":true,"action":"apply_dhcp"}\n' ;;
+    apply_static)
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }
+        address=$(printf '%s' "$body" | sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\([0-9./]*\)".*/\1/p'); gateway=$(printf '%s' "$body" | sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([0-9.]*\)".*/\1/p')
+        [ -n "$address" ] || { printf '{"error":"address required"}\n'; exit 0; }; ip -4 addr flush dev "$iface"; ip -4 addr add "$address" dev "$iface" || { printf '{"error":"failed to set IPv4 address"}\n'; exit 0; }
+        ip link set "$iface" up; [ -z "$gateway" ] || { ip -4 route del default 2>/dev/null || true; ip -4 route add default via "$gateway"; }
+        printf '{"success":true,"action":"apply_static"}\n' ;;
+    apply_ipv6_auto)
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }; ip -6 addr flush dev "$iface" scope global 2>/dev/null || true; dhcpcd -6 -n "$iface" >/dev/null 2>&1 || true
+        printf '{"success":true,"action":"apply_ipv6_auto"}\n' ;;
+    apply_ipv6_static)
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }
+        address=$(printf '%s' "$body" | sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\([0-9A-Fa-f:/.]*\)".*/\1/p'); gateway=$(printf '%s' "$body" | sed -n 's/.*"gateway"[[:space:]]*:[[:space:]]*"\([0-9A-Fa-f:]*\)".*/\1/p')
+        [ -n "$address" ] || { printf '{"error":"IPv6 address required"}\n'; exit 0; }; ip -6 addr flush dev "$iface" scope global 2>/dev/null || true; ip -6 addr add "$address" dev "$iface" || { printf '{"error":"failed to set IPv6 address"}\n'; exit 0; }
+        [ -z "$gateway" ] || { ip -6 route del default 2>/dev/null || true; ip -6 route add default via "$gateway" dev "$iface"; }; printf '{"success":true,"action":"apply_ipv6_static"}\n' ;;
+    apply_pppoe)
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }
+        username=$(printf '%s' "$body" | sed -n 's/.*"username"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9@._+-]*\)".*/\1/p'); password=$(printf '%s' "$body" | sed -n 's/.*"password"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9@._+!#$%&*=-]*\)".*/\1/p'); ipv6=$(printf '%s' "$body" | sed -n 's/.*"ipv6"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p')
+        [ -n "$username" ] && [ -n "$password" ] || { printf '{"error":"PPPoE credentials required"}\n'; exit 0; }
+        mkdir -p /etc/ppp/peers; chmod 0700 /etc/ppp
+        { printf 'plugin pppoe.so\nnic-%s\nuser "%s"\nnoauth\ndefaultroute\nusepeerdns\npersist\nmaxfail 0\nholdoff 5\nmtu 1492\nmru 1492\n' "$iface" "$username"; [ "$ipv6" = true ] && printf '+ipv6\nipv6cp-use-ipaddr\n'; } > "$PPPOE_PEER"; chmod 0600 "$PPPOE_PEER"
+        printf '"%s" * "%s" *\n' "$username" "$password" > /etc/ppp/chap-secrets; cp /etc/ppp/chap-secrets /etc/ppp/pap-secrets; chmod 0600 /etc/ppp/*-secrets
+        kv_set "$CONF" pppoe_interface "$iface"; kv_set "$CONF" pppoe_username "$username"; kv_set "$CONF" pppoe_ipv6 "$([ "$ipv6" = true ] && echo yes || echo no)"
+        pkill -x pppd 2>/dev/null || true; pppd call strata-wan >/dev/null 2>&1 &
+        printf '{"success":true,"action":"apply_pppoe"}\n' ;;
+    stop_pppoe) pkill -x pppd 2>/dev/null || true; printf '{"success":true,"action":"stop_pppoe"}\n' ;;
+    set_nat)
+        family=$(printf '%s' "$body" | sed -n 's/.*"family"[[:space:]]*:[[:space:]]*\([46]\).*/\1/p'); mode=$(printf '%s' "$body" | sed -n 's/.*"mode"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+        valid_iface "$iface" || { printf '{"error":"invalid interface"}\n'; exit 0; }; case "$family:$mode" in 4:off|4:masquerade|6:off|6:masquerade) ;; *) printf '{"error":"invalid NAT mode"}\n'; exit 0;; esac
+        kv_set "$CONF" "nat${family}_mode" "$mode"; kv_set "$CONF" "nat${family}_interface" "$iface"; write_nat_rules || { printf '{"error":"NAT rules failed validation"}\n'; exit 0; }; printf '{"success":true,"action":"set_nat"}\n' ;;
+    set_dns)
+        dns=$(printf '%s' "$body" | sed -n 's/.*"servers"[[:space:]]*:[[:space:]]*"\([0-9A-Fa-f:., ]*\)".*/\1/p'); { for ns in $(printf '%s' "$dns" | tr ',' ' '); do [ -n "$ns" ] && printf 'nameserver %s\n' "$ns"; done; } > /etc/resolv.conf.tmp && mv /etc/resolv.conf.tmp /etc/resolv.conf; printf '{"success":true,"action":"set_dns"}\n' ;;
+    *) printf '{"error":"invalid action: %s"}\n' "$(escape "$action")" ;;
+esac

@@ -1,0 +1,9 @@
+name = "gdk-pixbuf"
+version = "2.42.12"
+kind = "target"
+build_system = "meson"
+dependencies = ["glib"]
+configure_args = ["-Dman=false", "-Dgtk_doc=false", "-Dtests=false", "-Dinstalled_tests=false", "-Dgio_sniffing=false", "-Dintrospection=disabled", "-Dothers=disabled", "-Dpng=disabled", "-Djpeg=disabled", "-Dgif=disabled", "-Dtiff=disabled"]
+
+[source]
+url = "https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-{version}.tar.xz"

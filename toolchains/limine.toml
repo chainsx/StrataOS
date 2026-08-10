@@ -1,0 +1,6 @@
+name = "limine"
+version = "12.5.1"
+
+[source]
+url = "https://github.com/limine-bootloader/limine/releases/download/v{version}/limine-binary.tar.xz"
+sha256 = "3b704865d2a35c1cfa1c5da34c2848626ec6e43f59041d98c045d6c5460cfd3b"

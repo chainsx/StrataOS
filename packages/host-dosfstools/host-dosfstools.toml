@@ -1,0 +1,8 @@
+name = "host-dosfstools"
+version = "4.2"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+
+[source]
+url = "https://github.com/dosfstools/dosfstools/releases/download/v{version}/dosfstools-{version}.tar.gz"

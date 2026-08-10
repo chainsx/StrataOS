@@ -1,0 +1,9 @@
+name = "libyaml"
+version = "0.2.5"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = ["--enable-shared"]
+
+[source]
+url = "https://github.com/yaml/libyaml/releases/download/{version}/yaml-{version}.tar.gz"

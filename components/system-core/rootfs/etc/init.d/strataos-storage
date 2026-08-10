@@ -1,0 +1,54 @@
+#!/sbin/openrc-run
+
+description="Validate StrataOS component-owned volume mounts"
+
+depend() {
+    need localmount
+    before dbus sshd docker fail2ban strata-webui strataos-network strataos-logging
+}
+
+start() {
+    ebegin "Validating StrataOS component and volume mounts"
+    /usr/libexec/strataos/componentctl verify-mounts
+    eend $?
+}
+
+stop() {
+    ebegin "Flushing component-owned volumes"
+    sync
+    # Bind and overlay mounts must be released before their backing volume.
+    # Reverse order mirrors the initramfs mount order (notably /etc last).
+    if [ -s /run/strataos/binds.tsv ]; then
+        awk '{line[NR]=$0} END {for (i=NR; i>0; i--) print line[i]}' /run/strataos/binds.tsv |
+        while IFS="$(printf '\t')" read -r component target kind; do
+            [ -n "$target" ] || continue
+            mountpoint -q "$target" 2>/dev/null || continue
+            umount "$target" 2>/dev/null || umount -l "$target" 2>/dev/null || true
+        done
+    fi
+    # Detach loop devices that are no longer in use by services.
+    # Component volumes (ext4 images) are loop-mounted; services should
+    # have already released them during their own stop() handlers.
+    # Lazy-unmount any remaining component mount points, then detach
+    # the underlying loop devices so the data partition can unmount cleanly.
+    if [ -s /run/strataos/volumes.tsv ]; then
+        while IFS="$(printf '\t')" read -r component id mode device mountpoint backing; do
+            [ -n "$mountpoint" ] || continue
+            # Lazy-unmount the component volume if still mounted
+            if mountpoint -q "$mountpoint" 2>/dev/null; then
+                umount -l "$mountpoint" 2>/dev/null || true
+            fi
+        done < /run/strataos/volumes.tsv
+    fi
+    # Detach any remaining loop devices that aren't the root SquashFS
+    for loop in /dev/loop[0-9]*; do
+        [ -b "$loop" ] || continue
+        # Skip the rootfs SquashFS loop (it's mounted at /)
+        backing=$(losetup -l -n -O BACK-FILE "$loop" 2>/dev/null || true)
+        case "$backing" in
+            *.squashfs) continue ;;  # Component squashfs — part of root overlay, don't touch
+        esac
+        losetup -d "$loop" 2>/dev/null || true
+    done
+    eend 0
+}

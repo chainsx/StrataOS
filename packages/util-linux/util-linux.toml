@@ -1,0 +1,10 @@
+name = "util-linux"
+version = "2.40.4"
+kind = "target"
+build_system = "autotools"
+dependencies = ["ncurses", "zlib"]
+environment = ["NCURSESW6_CONFIG=false", "NCURSESW5_CONFIG=false"]
+configure_args = ["--disable-all-programs", "--enable-mount", "--enable-losetup", "--enable-lsblk", "--enable-blkid", "--enable-fdisks", "--enable-partx", "--enable-agetty", "--enable-switch_root", "--enable-scriptutils", "--enable-libblkid", "--enable-libfdisk", "--enable-libmount", "--enable-libsmartcols", "--enable-libuuid", "--without-systemd", "--without-udev", "--without-python", "--without-tinfo", "--without-readline", "--disable-makeinstall-chown", "--disable-makeinstall-setuid", "--disable-nls", "--disable-bash-completion"]
+
+[source]
+url = "https://www.kernel.org/pub/linux/utils/util-linux/v2.40/util-linux-{version}.tar.xz"

@@ -1,0 +1,12 @@
+name = "coreutils"
+version = "9.7"
+kind = "target"
+build_system = "autotools"
+dependencies = []
+configure_args = [
+    "--disable-nls",
+    "--enable-install-program=hostname",
+]
+
+[source]
+url = "https://ftp.gnu.org/gnu/coreutils/coreutils-{version}.tar.xz"

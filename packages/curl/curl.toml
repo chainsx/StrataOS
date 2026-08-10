@@ -1,0 +1,9 @@
+name = "curl"
+version = "8.14.1"
+kind = "target"
+build_system = "autotools"
+dependencies = ["openssl", "zlib", "ca-certificates"]
+configure_args = ["--with-openssl", "--with-ca-bundle=/etc/ssl/certs/ca-certificates.crt", "--without-libpsl", "--without-brotli", "--without-zstd", "--without-nghttp2", "--disable-ldap", "--disable-ldaps", "--disable-rtsp", "--disable-dict", "--disable-telnet", "--disable-tftp", "--disable-pop3", "--disable-imap", "--disable-smtp", "--disable-gopher", "--disable-manual", "--disable-docs"]
+
+[source]
+url = "https://curl.se/download/curl-{version}.tar.xz"

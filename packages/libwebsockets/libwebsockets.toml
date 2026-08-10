@@ -1,0 +1,11 @@
+name = "libwebsockets"
+version = "4.3.5"
+kind = "target"
+build_system = "cmake"
+dependencies = ["libuv", "openssl", "zlib"]
+patches = ["libwebsockets-linux-protocol-width.patch"]
+configure_args = ["-DCMAKE_POLICY_VERSION_MINIMUM=3.5", "-DLWS_WITH_LIBUV=ON", "-DLWS_WITH_SSL=ON", "-DLWS_WITH_HTTP2=OFF", "-DLWS_WITH_ZLIB=ON", "-DLWS_WITH_SHARED=ON", "-DLWS_WITH_STATIC=OFF", "-DLWS_WITHOUT_TESTAPPS=ON", "-DLWS_WITHOUT_CLIENT=ON", "-DLWS_WITHOUT_EXTENSIONS=ON", "-DLWS_WITHOUT_DAEMONIZE=ON"]
+
+[source]
+url = "https://github.com/warmcat/libwebsockets/archive/refs/tags/v{version}.tar.gz"
+sha256 = "87f99ad32803ed325fceac5327aae1f5c1b417d54ee61ad36cffc8df5f5ab276"

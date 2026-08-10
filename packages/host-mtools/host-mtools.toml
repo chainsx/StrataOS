@@ -1,0 +1,8 @@
+name = "host-mtools"
+version = "4.0.48"
+kind = "host"
+build_system = "autotools"
+dependencies = []
+
+[source]
+url = "https://ftp.gnu.org/gnu/mtools/mtools-{version}.tar.bz2"
