@@ -48,10 +48,8 @@ SPECIAL_CONTRACTS: dict[str, tuple[str, ...]] = {
     "iproute2": ("Makefile",),
     "dhcpcd": ("configure",),
     "docker-static": (),
-    "host-glslang": ("bin/glslangValidator",),
     "musl-runtime": (),
     "llvm-runtime": (),
-    "llvm-libs": ("llvm/CMakeLists.txt", "libclc/CMakeLists.txt"),
     "fail2ban": ("fail2ban/server", "config/action.d/nftables.conf", "bin/fail2ban-server"),
     "host-python-module": (),
 }
@@ -70,11 +68,9 @@ SPECIAL_HANDLER_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "iproute2": ("recipe.configure_args", "recipe.install_args", "PKG_CONFIG:="),
     "dhcpcd": ("recipe.configure_args", "recipe.build_args", "recipe.install_args"),
     "docker-static": ("Docker archive misses",),
-    "host-glslang": ("glslangValidator", "host_bin", "chmod"),
     "ca-certificates": ("ca-certificates.crt",),
     "font-file": ("usr/share/fonts/strataos", "OTF, TTF or TTC"),
     "musl-runtime": ("libc.so",),
-    "llvm-libs": ("recipe.configure_args", "llvm-tblgen", "--parallel", "DESTDIR", "libclc"),
     "llvm-runtime": ("libc++.so", "libunwind.so"),
     "fail2ban": ("python3.13/site-packages", "fail2ban-client", "config"),
     "host-python-module": ("site-packages", "copytree", "import {module_name}"),
@@ -464,7 +460,8 @@ def audit_source_recipes(
                 _validate_meson_value(name, key, value, blocks[key])
         else:
             special = str(getattr(recipe, "special", ""))
-            for relative in SPECIAL_CONTRACTS[special]:
+            contracts = SPECIAL_CONTRACTS[special]
+            for relative in contracts:
                 if not (source / relative).exists():
                     raise BuildError(f"{name}: special handler expects missing source path {relative}")
         static[name]["source_status"] = "source-options-ok"

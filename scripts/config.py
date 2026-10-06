@@ -136,7 +136,9 @@ def validate(config: dict[str, str], *, native: bool = True) -> None:
         raise BuildError("STRATA_BOOTLOADER must be limine-efi or extlinux")
     if bootloader == "limine-efi" and not config.get("STRATA_LIMINE_VERSION"):
         raise BuildError("STRATA_LIMINE_VERSION is required for STRATA_BOOTLOADER=limine-efi")
-    removed = sorted({"STRATA_DEFAULT_USER", "STRATA_ENABLE_OPENSSH"} & config.keys())
+    removed = sorted({
+        "STRATA_DEFAULT_USER", "STRATA_ENABLE_GRAPHICS", "STRATA_ENABLE_OPENSSH",
+    } & config.keys())
     if removed:
         raise BuildError(
             "removed configuration keys must be deleted: " + ", ".join(removed)
@@ -150,7 +152,7 @@ def validate(config: dict[str, str], *, native: bool = True) -> None:
         if key in config and as_int(config, key) < 0:
             raise BuildError(f"{key} must not be negative")
     for key in (
-        "STRATA_ENABLE_DOCKER", "STRATA_ENABLE_GRAPHICS",
+        "STRATA_ENABLE_DOCKER",
         "STRATA_ENABLE_FIREWALL",
         "STRATA_ENABLE_FAIL2BAN", "STRATA_ENABLE_CJK_FONTS",
         "STRATA_ENABLE_DIAGNOSTICS",
@@ -158,8 +160,6 @@ def validate(config: dict[str, str], *, native: bool = True) -> None:
         enabled(config, key)
     if enabled(config, "STRATA_ENABLE_FAIL2BAN") and not enabled(config, "STRATA_ENABLE_FIREWALL"):
         raise BuildError("STRATA_ENABLE_FAIL2BAN requires STRATA_ENABLE_FIREWALL=1")
-    if enabled(config, "STRATA_ENABLE_CJK_FONTS") and not enabled(config, "STRATA_ENABLE_GRAPHICS"):
-        raise BuildError("STRATA_ENABLE_CJK_FONTS requires STRATA_ENABLE_GRAPHICS=1")
     disk = load_data(ROOT / "configs/image/disk.conf")
     if as_int(disk, "partition.esp.size_mib") < 96:
         raise BuildError("partition.esp.size_mib must be at least 96")

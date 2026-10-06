@@ -19,7 +19,7 @@ The apparently overlapping packages are intentional:
   SQLite is a common library in `system-core`, shared by Python and its
   supporting system utilities rather than being duplicated across components. `host-python` is a build-only,
   same-version interpreter needed for CPython cross configuration.
-- Docker, graphics, CJK fonts, diagnostics, firewall and Fail2ban packages are
+- Docker, CJK fonts, diagnostics, firewall and Fail2ban packages are
   selected only when their corresponding component feature switch is enabled.
 
 ## Dependency coordination
@@ -27,8 +27,8 @@ The apparently overlapping packages are intentional:
 The graph is acyclic. Host recipes never depend on target artifacts. Target
 recipes use the musl sysroot and may use explicit host tools only for build-time
 code generation. Fail2ban depends on target Python and nftables; Python declares
-zlib, bzip2, OpenSSL, libffi, SQLite and ncurses. Docker and graphics remain
-independent optional branches.
+zlib, bzip2, OpenSSL, libffi, SQLite and ncurses. Docker remains an independent
+optional branch.
 
 Component/runtime ordering is also explicit: Network precedes OpenSSH and
 Firewall; Fail2ban requires Python, OpenSSH and Firewall and loads after all

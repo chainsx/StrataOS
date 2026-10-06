@@ -1,9 +1,0 @@
-name = "wlroots"
-version = "0.18.2"
-kind = "target"
-build_system = "meson"
-dependencies = ["libdrm", "libxkbcommon", "mesa", "pixman", "wayland", "wayland-protocols"]
-configure_args = ["-Dbackends=[]", "-Drenderers=gles2", "-Dallocators=gbm", "-Dxwayland=disabled", "-Dsession=disabled", "-Dcolor-management=disabled", "-Dlibliftoff=disabled", "-Dxcb-errors=disabled", "-Dexamples=false"]
-
-[source]
-url = "https://gitlab.freedesktop.org/wlroots/wlroots/-/archive/{version}/wlroots-{version}.tar.gz"

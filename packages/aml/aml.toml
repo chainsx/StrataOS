@@ -1,9 +1,0 @@
-name = "aml"
-version = "1.0.0"
-kind = "target"
-build_system = "meson"
-dependencies = []
-configure_args = ["-Dexamples=false"]
-
-[source]
-url = "https://github.com/any1/aml/archive/refs/tags/v{version}.tar.gz"

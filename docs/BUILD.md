@@ -168,17 +168,13 @@ make qemu
 This requires `qemu-system-x86_64` (or `qemu-system-aarch64` for arm64)
 and OVMF UEFI firmware. `make qemu` supports only
 `STRATA_BOOTLOADER=limine-efi`; use a U-Boot-capable board or emulator for an
-extlinux image. The default QEMU invocation uses an EGL-headless
-VirGL device and keeps the serial monitor on stdio, providing the guest with a
-DRM render node without opening a display window. It therefore requires a QEMU
-build with OpenGL/VirGL support. Set `STRATA_QEMU_GPU=none` to fall back to
-`-nographic` for boot-only diagnostics without a graphical session.
-It forwards port 2222 to the guest's SSH port.
+extlinux image. The default QEMU invocation uses `-nographic` and exposes the
+serial monitor on standard I/O. It forwards port 2222 to the guest's SSH port.
 
 The launcher gives the virtio system disk a higher UEFI `bootindex` than the
-network adapter and refreshes writable OVMF VARS state when the raw image or GPU
-topology changes. This prevents a stale PCI device path from falling through to
-`Start PXE over IPv4` after switching between VirGL and serial-only launches.
+network adapter and refreshes writable OVMF VARS state when the raw image
+changes. This prevents a stale PCI device path from falling through to
+`Start PXE over IPv4`.
 
 ## Bootloader Selection
 

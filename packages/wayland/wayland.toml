@@ -1,9 +1,0 @@
-name = "wayland"
-version = "1.23.1"
-kind = "target"
-build_system = "meson"
-dependencies = ["host-wayland", "expat", "libffi"]
-configure_args = ["-Dtests=false", "-Ddocumentation=false", "-Ddtd_validation=false"]
-
-[source]
-url = "https://gitlab.freedesktop.org/wayland/wayland/-/releases/{version}/downloads/wayland-{version}.tar.xz"

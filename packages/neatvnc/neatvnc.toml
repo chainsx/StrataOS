@@ -1,9 +1,0 @@
-name = "neatvnc"
-version = "1.0.1"
-kind = "target"
-build_system = "meson"
-dependencies = ["aml", "gmp", "libdrm", "mesa", "pixman", "zlib"]
-configure_args = ["-Dbenchmarks=false", "-Dexamples=false", "-Dtests=false", "-Djpeg=disabled", "-Dtls=disabled", "-Dnettle=disabled", "-Dgbm=enabled", "-Dh264=disabled", "-Dexperimental=false"]
-
-[source]
-url = "https://github.com/any1/neatvnc/archive/refs/tags/v{version}.tar.gz"

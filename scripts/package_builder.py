@@ -29,14 +29,11 @@ HOST_RECIPES = (
     "host-zlib",
     "host-zstd",
     "host-pkgconf",
-    "host-expat",
-    "host-wayland",
     "host-squashfs-tools",
     "host-e2fsprogs",
     "host-dosfstools",
     "host-mtools",
     "host-python",
-    "host-glslang",
 )
 
 LLVM_RUNTIME_SONAMES = ("libc++.so.1", "libunwind.so.1")
@@ -165,8 +162,6 @@ def component_package_names(config: dict[str, str]) -> list[str]:
 
     if enabled(config, "STRATA_ENABLE_DOCKER"):
         enabled_components.add("docker")
-    if enabled(config, "STRATA_ENABLE_GRAPHICS"):
-        enabled_components.add("graphics")
     if enabled(config, "STRATA_ENABLE_CJK_FONTS"):
         enabled_components.add("fonts-cjk")
     if enabled(config, "STRATA_ENABLE_FIREWALL"):
@@ -477,20 +472,6 @@ class PackageBuilder:
             "host_cc": str(self.llvm_bin / "clang"),
             "host_cxx": str(self.llvm_bin / "clang++"),
         }
-        # Architecture-specific Mesa driver selections, following Debian 13 backports
-        if self.arch == "x86_64":
-            ctx["mesa_gallium_drivers"] = "svga,nouveau,r300,r600,zink,llvmpipe,softpipe,virgl"
-            ctx["mesa_vulkan_drivers"] = "amd,swrast,virtio"
-            ctx["mesa_llvm"] = "enabled"
-        elif self.arch == "arm64":
-            ctx["mesa_gallium_drivers"] = "etnaviv,freedreno,lima,nouveau,panfrost,r300,r600,zink,llvmpipe,softpipe,svga,tegra,v3d,vc4,virgl"
-            ctx["mesa_vulkan_drivers"] = "broadcom,freedreno,panfrost,swrast,virtio"
-            ctx["mesa_llvm"] = "enabled"
-        else:
-            ctx["mesa_gallium_drivers"] = "softpipe,llvmpipe,zink,virgl"
-            ctx["mesa_vulkan_drivers"] = "swrast,virtio"
-            ctx["mesa_llvm"] = "enabled"
-        ctx["mesa_c_args"] = "-DUTIL_ARCH_LITTLE_ENDIAN=1 -DUTIL_ARCH_BIG_ENDIAN=0"
         return ctx
 
     def expand_args(self, args: Iterable[str], context: dict[str, str]) -> list[str]:
@@ -900,12 +881,6 @@ class PackageBuilder:
         if recipe.kind == "target":
             command += [f"--host={self.triple}", f"--build={build_triplet()}"]
         command += self.expand_args(recipe.configure_args, context)
-        # Mesa 26.x needs LLVM_CONFIG for cross-compilation LLVM detection.
-        host_bin = getattr(self, "host_bin", None)
-        if host_bin is not None:
-            llvm_config = host_bin / "llvm-config"
-            if llvm_config.exists():
-                env["LLVM_CONFIG"] = str(llvm_config)
         completed = run(command, cwd=build, env=env, capture=True)
         self._check_configure_output(recipe, completed.stdout or "", "autotools")
         self.audit_generated_build_plan(recipe, build, env)
@@ -955,12 +930,6 @@ class PackageBuilder:
                     f"-DCMAKE_MODULE_LINKER_FLAGS={join_flags(link_flags)}",
                 ]
         command += self.expand_args(recipe.configure_args, context)
-        # Mesa 26.x needs LLVM_CONFIG for cross-compilation LLVM detection.
-        host_bin = getattr(self, "host_bin", None)
-        if host_bin is not None:
-            llvm_config = host_bin / "llvm-config"
-            if llvm_config.exists():
-                env["LLVM_CONFIG"] = str(llvm_config)
         completed = run(command, env=env, capture=True)
         self._check_configure_output(recipe, completed.stdout or "", "cmake")
         self.audit_generated_build_plan(recipe, build, env)
@@ -989,10 +958,6 @@ class PackageBuilder:
                 "--prefix=/usr", "--libdir=lib",
             ]
         command += self.expand_args(recipe.configure_args, context)
-        # Mesa 26.x needs LLVM_CONFIG for cross-compilation LLVM detection.
-        llvm_config = self.host_bin / "llvm-config"
-        if llvm_config.exists():
-            env["LLVM_CONFIG"] = str(llvm_config)
         completed = run(command, env=env, capture=True)
         if "unknown options" in (completed.stdout or "").lower():
             raise BuildError(f"{recipe.name}: Meson rejected one or more declared options")
@@ -1010,7 +975,6 @@ class PackageBuilder:
         handlers = {
             "musl-runtime": self.special_musl_runtime,
             "llvm-runtime": self.special_llvm_runtime,
-            "llvm-libs": self.special_llvm_libs,
             "ninja": self.special_ninja,
             "zstd": self.special_zstd,
             "squashfs-tools": self.special_squashfs,
@@ -1026,7 +990,6 @@ class PackageBuilder:
             "iproute2": self.special_iproute2,
             "dhcpcd": self.special_dhcpcd,
             "docker-static": self.special_docker,
-            "host-glslang": self.special_host_glslang,
             "fail2ban": self.special_fail2ban,
             "host-python-module": self.special_host_python_module,
         }
@@ -1091,135 +1054,6 @@ class PackageBuilder:
                 relative = item.relative_to(self.sysroot)
                 self.copy_entry(item, root / relative)
 
-
-    def special_llvm_libs(self, recipe: Recipe, source: Path | None, build: Path, root: Path, env: dict[str, str], context: dict[str, str]) -> None:
-        if source is None or not source.is_dir():
-            raise BuildError("llvm-libs: LLVM source is missing")
-        llvm_dir = source / "llvm"
-        if not llvm_dir.is_dir():
-            raise BuildError("llvm-libs: llvm/ subdirectory not found in LLVM source")
-        # Build native TableGen first (required when cross-compiling or when
-        # host/target share the same arch but the host tablegen may reference
-        # glibc symbols not available in our musl sysroot).
-        tablegen_build = build.parent / (build.name + "-native")
-        tablegen_build.mkdir(parents=True, exist_ok=True)
-        native_env = {k: v for k, v in env.items() if k not in ("DESTDIR",)}
-        native_env.pop("CC", None)
-        native_env.pop("CXX", None)
-        native_env.pop("AR", None)
-        native_env.pop("RANLIB", None)
-        native_env.pop("NM", None)
-        native_env.pop("STRIP", None)
-        native_env.pop("PKG_CONFIG", None)
-        native_env.pop("CFLAGS", None)
-        native_env.pop("CXXFLAGS", None)
-        native_env.pop("LDFLAGS", None)
-        native_env.pop("CPPFLAGS", None)
-        native_env["CC"] = str(self.llvm_bin / "clang")
-        native_env["CXX"] = str(self.llvm_bin / "clang++")
-        run([
-            str(self.cmake_bin / "cmake"), "-S", str(llvm_dir), "-B", str(tablegen_build),
-            "-G", "Ninja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DLLVM_TARGETS_TO_BUILD=Native",
-            "-DLLVM_BUILD_LLVM_DYLIB=OFF",
-            "-DLLVM_LINK_LLVM_DYLIB=OFF",
-            "-DLLVM_ENABLE_RTTI=OFF",
-            "-DLLVM_INCLUDE_TESTS=OFF",
-            "-DLLVM_INCLUDE_BENCHMARKS=OFF",
-            "-DLLVM_INCLUDE_EXAMPLES=OFF",
-            "-DLLVM_INCLUDE_DOCS=OFF",
-            "-DLLVM_ENABLE_BINDINGS=OFF",
-            "-DLLVM_BUILD_TOOLS=OFF",
-            "-DLLVM_BUILD_UTILS=OFF",
-        ], env=native_env)
-        run([str(self.cmake_bin / "cmake"), "--build", str(tablegen_build),
-             "--target", "llvm-tblgen", "--parallel", str(min(self.parallel, 4))], env=native_env)
-
-        # Build target LLVM shared library
-        arch_targets = "AArch64" if self.arch == "arm64" else "X86;AMDGPU"
-        command = [
-            str(self.cmake_bin / "cmake"), "-S", str(llvm_dir), "-B", str(build),
-            "-G", "Ninja",
-            f"-DCMAKE_TOOLCHAIN_FILE={self.output / 'generated/cmake-toolchain.cmake'}",
-            "-DCMAKE_INSTALL_PREFIX=/usr",
-            f"-DLLVM_TABLEGEN={tablegen_build / 'bin/llvm-tblgen'}",
-            f"-DLLVM_TARGETS_TO_BUILD={arch_targets}",
-        ]
-        command += self.expand_args(recipe.configure_args, context)
-        # Mesa 26.x needs LLVM_CONFIG for cross-compilation LLVM detection.
-        llvm_config = self.host_bin / "llvm-config"
-        if llvm_config.exists():
-            env["LLVM_CONFIG"] = str(llvm_config)
-        completed = run(command, env=env, capture=True)
-        self._check_configure_output(recipe, completed.stdout or "", "cmake")
-        self.audit_generated_build_plan(recipe, build, env)
-        run([str(self.cmake_bin / "cmake"), "--build", str(build), "--parallel", str(self.parallel)], env=env)
-        install_env = env.copy()
-        install_env["DESTDIR"] = str(root)
-        run([str(self.cmake_bin / "cmake"), "--install", str(build), *self.expand_args(recipe.install_args, context)], env=install_env)
-
-        # Create a host-side llvm-config wrapper so mesa's meson build can
-        # detect the target LLVM installation in the sysroot.
-        llvm_config_wrapper = self.host_bin / "llvm-config"
-        sysroot_libdir = str(self.sysroot / "usr" / "lib")
-        sysroot_includedir = str(self.sysroot / "usr" / "include")
-        llvm_cfg = (
-            "#!/bin/sh\n"
-            "set -eu\n"
-            "# StrataOS llvm-config wrapper for target LLVM.\n"
-            "# LLVM built with LLVM_BUILD_LLVM_DYLIB=ON, all components in libLLVM.so.\n"
-            "version='" + recipe.version + "'\n"
-            "libdir='" + sysroot_libdir + "'\n"
-            "includedir='" + sysroot_includedir + "'\n"
-            "case \"$1\" in\n"
-            "  --version) echo \"$version\" ;;\n"
-            "  --libs) echo \"-L$libdir -lLLVM\" ;;\n"
-            "  --ldflags) echo \"-L$libdir\" ;;\n"
-            "  --cppflags) echo \"-I$includedir\" ;;"
-            "  --cxxflags) echo \"-I$includedir -std=c++17\" ;;\n"
-            "  --shared-mode) echo \"shared\" ;;\n"
-            "  --link-shared) echo \"$libdir/libLLVM.so\" ;;\n"
-            "  --system-libs) echo \"-lz -lzstd\" ;;\n"
-            "  --components) echo \"aarch64 aarch64asmparser aarch64codegen aarch64desc aarch64disassembler aarch64info aarch64utils aggressiveinstcombine amdgpu amdgpuasmparser amdgpucodegen amdgpudesc amdgpudisassembler amdgpuinfo amdgputargetmca amdgpuutils all-targets analysis arm armasmparser armcodegen armdesc armdisassembler arminfo armutils asmparser asmprinter binaryformat bitreader bitstreamreader bitwriter bpf bpfasmparser bpfcodegen bpfdesc bpfdisassembler bpfinfo bpfutils cfguard codegen codegentypes core coroutines coverage debuginfobtf debuginfocodeview debuginfodwarf debuginfogsym debuginfologicalview debuginfomacho debuginfomir debuginfomsf debuginfopdb demangle dlltooldriver dwarflinkerparcoff dwarflinkerparclassic dwarflinkerpargeneric dwarflinker dwp engine executionengine extensions filecheck frontenddriver frontendhlsl frontendopenacc frontendopenmp fuzzercli fuzzmutate globalisel hexagon hexagonasmparser hexagoncodegen hexagondesc hexagondisassembler hexagoninfo instcombine instrumentation interfacestub ipo irprinter irreader jitlink lanai lanaiasmparser lanaicodegen lanaidesc lanaidisassembler lanaiinfo libdriver lineeditor linker loongarch loongarchasmparser loongarchcodegen loongarchdesc loongarchdisassembler loongarchinfo lto mcdisassembler mcjit mcparser mips mipsasmparser mipscodegen mipsdesc mipsdisassembler mipsinfo mirparser msp430 msp430asmparser msp430codegen msp430desc msp430disassembler msp430info native nvptx nvptxcodegen nvptxdesc nvptxinfo objcopy objdump option orcjit orcshared orctargetprocess passes powerpc powerpcasmparser powerpccodegen powerpcdesc powerpcdisassembler powerpcinfo profiledata remarks riscv riscvasmparser riscvcodegen riscvdesc riscvdisassembler riscvinfo riscvtargetmca runtimedyld scalaropts selectiondag sparc sparcasmparser sparccodegen sparcdesc sparcdisassembler sparcinfo support systemz systemzasmparser systemzcodegen systemzdesc systemzdisassembler systemzinfo tablegen target targetparser textapi transformutils vectorize webassembly webassemblyasmparser webassemblycodegen webassemblydesc webassemblydisassembler webassemblyinfo webassemblyutils windowsdriver windowsmanifest x86 x86asmparser x86codegen x86desc x86disassembler x86info x86targetmca xcore xcorecodegen xcoredesc xcoredisassembler xcoreinfo xray\" ;;\n"
-            "  --targets-built) echo \"X86\" ;;\n"
-            "  --host-target) echo \"x86_64-unknown-linux-musl\" ;;\n"
-            "  --has-rtti) echo \"YES\" ;;\n"
-            "  --cmakedir) echo \"$libdir/cmake/llvm\" ;;\n"
-            "  --link-static) echo \"$libdir/libLLVM.a\" ;;\n"
-            "  *) echo \"$*\" >&2; echo \"-L$libdir -lLLVM\" ;;\n"
-            "esac\n"
-        )
-        llvm_config_wrapper.write_text(llvm_cfg)
-        llvm_config_wrapper.chmod(0o755)
-        self.write_cross_files()
-
-        # Build libclc from the LLVM source (needed by mesa 26.x for iris/panfrost
-        # shader precompilation).  libclc compiles OpenCL builtins to LLVM bitcode
-        # and thus requires a *native* clang, not the cross-compiled target clang.
-        # We use the host LLVM from the bootstrap toolchain for this.
-        libclc_dir = source / "libclc"
-        if libclc_dir.is_dir():
-            libclc_build = build.parent / (build.name + "-libclc")
-            libclc_build.mkdir(parents=True, exist_ok=True)
-            libclc_native_env = env.copy()
-            libclc_native_env["PATH"] = str(self.llvm_bin) + ":" + libclc_native_env.get("PATH", "")
-            run([
-                str(self.cmake_bin / "cmake"), "-S", str(libclc_dir),
-                "-B", str(libclc_build),
-                "-G", "Ninja",
-                f"-DCMAKE_TOOLCHAIN_FILE={self.output / 'generated/cmake-toolchain.cmake'}",
-                "-DCMAKE_INSTALL_PREFIX=/usr",
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DLLVM_DIR=" + str(root / "usr" / "lib" / "cmake" / "llvm"),
-                "-DLIBCLC_CUSTOM_LLVM_TOOLS_BINARY_DIR=" + str(self.llvm_bin),
-            ], env=libclc_native_env)
-            run([str(self.cmake_bin / "cmake"), "--build", str(libclc_build),
-                 "--parallel", str(self.parallel)], env=libclc_native_env)
-            libclc_install_env = libclc_native_env.copy()
-            libclc_install_env["DESTDIR"] = str(root)
-            run([str(self.cmake_bin / "cmake"), "--install", str(libclc_build), "--strip"],
-                env=libclc_install_env)
 
     def special_ninja(self, recipe: Recipe, source: Path | None, build: Path, root: Path, env: dict[str, str], context: dict[str, str]) -> None:
         if source is None or not source.is_dir():
@@ -1400,32 +1234,6 @@ class PackageBuilder:
         run(["make", f"DESTDIR={root}", *self.expand_args(recipe.install_args, context), "install"], cwd=source, env=env)
 
 
-    def special_host_glslang(self, recipe: Recipe, source: Path | None, build: Path, root: Path, env: dict[str, str], context: dict[str, str]) -> None:
-        """Install glslangValidator from official Khronos release or build from source."""
-        if recipe.kind != "host":
-            raise BuildError("host-glslang must be a host package")
-        if self.arch == "x86_64":
-            # x86_64: use official Khronos release binary (pre-built)
-            if source is None or not source.is_dir():
-                raise BuildError("host-glslang: source directory is missing")
-            validator = source / "bin" / "glslangValidator"
-            if not validator.is_file():
-                raise BuildError("host-glslang: glslangValidator not found in release archive")
-            shutil.copy2(validator, self.host_bin / "glslangValidator")
-            (self.host_bin / "glslangValidator").chmod(0o755)
-            # Also copy glslang for convenience
-            glslang_bin = source / "bin" / "glslang"
-            if glslang_bin.is_file():
-                shutil.copy2(glslang_bin, self.host_bin / "glslang")
-                (self.host_bin / "glslang").chmod(0o755)
-        else:
-            # arm64 and others: build from source using CMake.
-            # glslang needs spirv-headers and spirv-tools; we use the system
-            # package or hope they are available on the host.
-            raise BuildError(
-                "host-glslang: source build for arch " + self.arch + " is not yet implemented. "
-                "Please install glslang-tools on the build host for now."
-            )
     def special_docker(self, recipe: Recipe, source: Path | None, build: Path, root: Path, env: dict[str, str], context: dict[str, str]) -> None:
         if source is None or not source.is_dir():
             raise BuildError("Docker static archive is missing")
@@ -1614,12 +1422,9 @@ def verify_package_outputs(config_path: Path, output: Path) -> None:
         "diagnostics": ("usr/bin/htop", "usr/bin/lsof"),
         "firewall": ("usr/sbin/nft",),
         "fail2ban": ("usr/bin/fail2ban-server",),
-        "graphics": ("usr/bin/cage", "usr/bin/wayvnc"),
         "fonts-cjk": ("usr/share/fonts/strataos/NotoSansSC-Regular.otf",),
     }
     for component, paths in required.items():
-        if component == "graphics" and not enabled(config, "STRATA_ENABLE_GRAPHICS"):
-            continue
         if component == "fonts-cjk" and not enabled(config, "STRATA_ENABLE_CJK_FONTS"):
             continue
         if component == "firewall" and not enabled(config, "STRATA_ENABLE_FIREWALL"):

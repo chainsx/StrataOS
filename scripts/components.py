@@ -399,8 +399,6 @@ def build_components(config_path: Path, output: Path) -> list[Path]:
 
     if enabled(config, "STRATA_ENABLE_DOCKER"):
         selected.append("docker")
-    if enabled(config, "STRATA_ENABLE_GRAPHICS"):
-        selected.append("graphics")
     if enabled(config, "STRATA_ENABLE_CJK_FONTS"):
         selected.append("fonts-cjk")
     if enabled(config, "STRATA_ENABLE_FIREWALL"):

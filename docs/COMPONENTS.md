@@ -141,9 +141,8 @@ and its persistent host-identity volume; SSH is enabled by default and can be
 controlled through OpenRC. Fail2ban is a separate optional security component
 that depends explicitly on Python, OpenSSH and Firewall.
 
-Docker, Graphics, CJK Fonts, Diagnostics, Firewall and Fail2ban are reference
-implementations of feature components. `graphics` owns the reusable Wayland
-compositor, VNC server and XKB data, while `fonts-cjk` owns the shared Noto CJK
+Docker, CJK Fonts, Diagnostics, Firewall and Fail2ban are reference
+implementations of feature components. `fonts-cjk` owns the shared Noto CJK
 font. `diagnostics` contains htop and lsof. `firewall` depends on `system-core`
 and `network`, owns `nftables` and `libnftnl`, and declares no data volume. The
 shared `libmnl` stays in `system-core` because both iproute2 and nftables link
@@ -157,7 +156,7 @@ in place before the Docker daemon starts; note that a component's
 `after`/`priority` fields only order squashfs assembly and are not the runtime
 boot-order mechanism, which OpenRC's `depend()` block provides instead.
 
-The default full image therefore contains 11 components. Component root paths
+The default full image therefore contains 10 components. Component root paths
 are exposed to OverlayFS through short initramfs-only aliases; this is an
 implementation detail that prevents a long colon-separated `lowerdir` option
 from exceeding BusyBox's mount argument buffer after further component splits.

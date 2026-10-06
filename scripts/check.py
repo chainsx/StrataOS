@@ -16,7 +16,7 @@ from recipes import load_toolchain_inputs
 
 EXPECTED_COMPONENTS = {
     "system-core", "kernel-modules", "network", "python", "diagnostics", "openssh", "docker",
-    "graphics", "fonts-cjk", "firewall", "fail2ban",
+    "fonts-cjk", "firewall", "fail2ban",
 }
 
 
@@ -59,7 +59,7 @@ def check_recipes(config: dict[str, str]) -> None:
             assigned[name] = component
     required = {
         "busybox", "openrc", "zsh", "openssh", "docker-static",
-        "wlroots", "cage", "wayvnc", "fail2ban",
+        "fail2ban",
     }
     if not required.issubset(assigned):
         fail("required runtime package assignments are incomplete")

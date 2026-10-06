@@ -36,14 +36,6 @@ Docker requires namespaces, PID/network/IPC/UTS/mount and user namespaces,
 `CONFIG_SECCOMP`, `CONFIG_SECCOMP_FILTER`, Veth, bridge netfilter, OverlayFS and
 nftables NAT/connection tracking.
 
-## graphics component
-
-Both generic images build the DRM core and VirtIO GPU driver into the kernel, so
-QEMU/KVM guests expose a DRM render node for Mesa. Physical machines additionally
-need their exact DRM/KMS and GPU driver enabled in the architecture or device
-kernel seed, together with any required input, USB controller and connector
-drivers; those cannot be chosen generically without a device target.
-
 ## firewall component
 
 UI rules use the nftables `inet` family, making `CONFIG_NF_TABLES_INET` mandatory

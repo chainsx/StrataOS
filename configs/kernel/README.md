@@ -11,11 +11,11 @@ vendor branding.
 
 Both configurations build early-boot storage, SquashFS, OverlayFS, ext4,
 Btrfs, MD RAID1, dm-integrity, dm-verity, cgroup v2, namespaces, seccomp,
-container networking, pstore, netconsole, the DRM core and the VirtIO GPU driver
-into the kernel. Loadable modules are enabled and installed into the separate
-`kernel-modules` component; USB mass storage is the common modular driver.
-Physical-device-specific GPU drivers, sound, media, Bluetooth, Wi-Fi, suspend,
-profiling and broad consumer-device driver families remain disabled by default.
+container networking, pstore and netconsole into the kernel. Loadable modules
+are enabled and installed into the separate `kernel-modules` component; USB
+mass storage is the common modular driver. Graphics, sound, media, Bluetooth,
+Wi-Fi, suspend, profiling and broad consumer-device driver families remain
+disabled by default.
 
 The build copies the selected seed into the Linux output directory, runs
 `olddefconfig` with LLVM/Clang and validates the resolved configuration against

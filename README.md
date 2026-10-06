@@ -4,7 +4,7 @@ StrataOS is an immutable, modular GNU/Linux distribution compiled from
 upstream source code and targeting UEFI Class 3 devices or U-Boot platforms
 with extlinux support. The target
 system consists of OpenRC, Zsh, musl libc, the LLVM/Clang toolchain,
-Linux 6.18, and OpenSSH. Docker and headless graphics are selectable
+Linux 6.18, and OpenSSH. Docker and CJK fonts are selectable
 components.
 
 This program is free software.  See the file LICENSE for copying
@@ -82,7 +82,6 @@ flags in `.config`:
 
 ```text
 STRATA_ENABLE_DOCKER=1     Include the Docker container runtime
-STRATA_ENABLE_GRAPHICS=1   Include Wayland, Cage, and wayvnc
 STRATA_ENABLE_FIREWALL=1   Include nftables and firewall policy
 STRATA_ENABLE_FAIL2BAN=1   Include SSH intrusion protection
 STRATA_ENABLE_CJK_FONTS=1  Include the Noto Sans CJK font component
@@ -150,7 +149,7 @@ The current full image is assembled from independently attributed components:
 
 - default base: `system-core`, `kernel-modules`, `network`, `python`, and `openssh`;
 - security and diagnostics: `firewall`, `fail2ban`, and `diagnostics`;
-- application/runtime: `docker`, `graphics`, and `fonts-cjk`.
+- application/runtime: `docker` and `fonts-cjk`.
 
 Optional components are included only when selected by the build configuration.
 Each component carries unified metadata, a package provenance list, and a
@@ -338,7 +337,7 @@ system's own logic (make, cmake, ninja).
 
 - `defconfigs/x86_64_defconfig` / `defconfigs/arm64_defconfig` -- target
   architecture, version, and component enable flags
-  (`STRATA_ENABLE_DOCKER`, `STRATA_ENABLE_GRAPHICS`,
+  (`STRATA_ENABLE_DOCKER`,
   `STRATA_ENABLE_FIREWALL`, `STRATA_ENABLE_FAIL2BAN`,
   `STRATA_ENABLE_CJK_FONTS`, `STRATA_ENABLE_DIAGNOSTICS`)
 - `configs/image/disk.conf` -- partition layout and sizing

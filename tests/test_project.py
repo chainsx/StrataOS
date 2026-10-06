@@ -483,18 +483,6 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "STRATA_GLOBAL_LINK_POLICY"):
             PackageBuilder._check_configure_output(recipe, output, "cmake")
 
-    def test_cmake_source_audit_accepts_variables_checked_with_defined(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name)
-            (source / "CMakeLists.txt").write_text(
-                "if(NOT DEFINED LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR)\n"
-                "  message(FATAL_ERROR missing)\n"
-                "endif()\n"
-            )
-            self.assertIn(
-                "LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR", _cmake_options(source)
-            )
-
     def test_host_cmake_does_not_pass_unused_cxx_cache_variables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
@@ -520,77 +508,6 @@ class ProjectTests(unittest.TestCase):
             self.assertNotIn(f"-DCMAKE_CXX_COMPILER={builder.llvm_bin / 'clang++'}", configure)
             self.assertNotIn("-DCMAKE_CXX_FLAGS_INIT=-O2 -pipe -fPIC", configure)
             self.assertIn("-DZLIB_BUILD_EXAMPLES=OFF", configure)
-
-    def test_host_glslang_audits_binary_and_source_archives(self) -> None:
-        recipe = load_recipes()["host-glslang"]
-        with tempfile.TemporaryDirectory() as tmp_name:
-            tmp = Path(tmp_name)
-            source_archive = tmp / "source-archive"
-            source_archive.mkdir()
-            (source_archive / "CMakeLists.txt").write_text("project(glslang)\n")
-            report = audit_source_recipes(
-                {"host-glslang": recipe}, {"host-glslang": source_archive}
-            )
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-
-            binary_archive = tmp / "binary-archive"
-            validator = binary_archive / "bin/glslangValidator"
-            validator.parent.mkdir(parents=True)
-            validator.write_text("prebuilt validator\n")
-            report = audit_source_recipes(
-                {"host-glslang": recipe}, {"host-glslang": binary_archive}
-            )
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-
-    def test_host_glslang_keeps_x86_binary_path_and_builds_arm64_source(self) -> None:
-        recipe = load_recipes()["host-glslang"]
-        with tempfile.TemporaryDirectory() as tmp_name:
-            tmp = Path(tmp_name)
-            builder = PackageBuilder.__new__(PackageBuilder)
-            builder.host = tmp / "host"
-            builder.host_bin = builder.host / "bin"
-            builder.host_bin.mkdir(parents=True)
-
-            binary_source = tmp / "x86-source"
-            validator = binary_source / "bin/glslangValidator"
-            validator.parent.mkdir(parents=True)
-            validator.write_text("x86 release validator\n")
-            builder.arch = "x86_64"
-            builder.special_host_glslang(recipe, binary_source, tmp / "x86-build", tmp / "root", {}, {})
-            self.assertEqual(
-                "x86 release validator\n",
-                (builder.host_bin / "glslangValidator").read_text(),
-            )
-
-            builder.host = tmp / "arm-host"
-            builder.host_bin = builder.host / "bin"
-            builder.host_bin.mkdir(parents=True)
-            source = tmp / "arm-source"
-            source.mkdir()
-            (source / "CMakeLists.txt").write_text("project(glslang)\n")
-            builder.arch = "arm64"
-            builder.cmake_bin = tmp / "cmake/bin"
-            builder.llvm_bin = tmp / "llvm/bin"
-            builder.parallel = 2
-
-            def mock_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
-                if "--install" in command:
-                    installed = builder.host_bin / "glslang"
-                    installed.write_text("arm source validator\n")
-                    (builder.host_bin / "glslangValidator").symlink_to(installed.name)
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            with patch("package_builder.run", side_effect=mock_run) as mocked_run:
-                builder.special_host_glslang(
-                    recipe, source, tmp / "arm-build", tmp / "root", {}, {}
-                )
-
-            configure = mocked_run.call_args_list[0].args[0]
-            self.assertIn("-DBUILD_EXTERNAL=OFF", configure)
-            self.assertIn("-DENABLE_OPT=OFF", configure)
-            self.assertIn("-DGLSLANG_TESTS=OFF", configure)
-            self.assertIn(f"-DCMAKE_CXX_COMPILER={builder.llvm_bin / 'clang++'}", configure)
-            self.assertTrue((builder.host_bin / "glslangValidator").is_file())
 
     def test_glib_meson_tools_use_host_scripts_and_native_target_wrappers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1395,7 +1312,7 @@ class ProjectTests(unittest.TestCase):
             self.assertNotIn("STRATA_DEFAULT_USER", text)
             self.assertNotIn("STRATA_ENABLE_OPENSSH", text)
 
-        legacy = dict(self.x86, STRATA_ENABLE_OPENSSH="1")
+        legacy = dict(self.x86, STRATA_ENABLE_GRAPHICS="1")
         with self.assertRaisesRegex(BuildError, "removed configuration keys"):
             validate(legacy, native=False)
 
@@ -1860,14 +1777,13 @@ class ProjectTests(unittest.TestCase):
             destination.write_bytes(b"saved-vars")
             self.assertEqual(destination, prepare_vars(template, output, raw, "serial"))
             self.assertEqual(b"saved-vars", destination.read_bytes())
-            prepare_vars(template, output, raw, "virgl")
+            raw.write_bytes(b"updated-image")
+            prepare_vars(template, output, raw, "serial")
             self.assertEqual(b"clean-vars", destination.read_bytes())
 
-    def test_qemu_exposes_a_headless_virgl_render_node_by_default(self) -> None:
+    def test_qemu_uses_the_serial_console_without_a_gpu(self) -> None:
         source = (ROOT / "scripts/qemu.py").read_text()
-        self.assertIn('"egl-headless,gl=on"', source)
-        self.assertIn('"virtio-gpu-gl-pci"', source)
-        self.assertIn('os.environ.get("STRATA_QEMU_GPU", "virgl")', source)
+        self.assertIn('"-nographic"', source)
 
     def test_foreground_services_do_not_block_openrc_runlevel_startup(self) -> None:
         getty = (
@@ -2139,12 +2055,10 @@ class ProjectTests(unittest.TestCase):
         config = dict(self.x86)
         config.update({
             "STRATA_ENABLE_DOCKER": "0",
-            "STRATA_ENABLE_GRAPHICS": "0",
             "STRATA_ENABLE_CJK_FONTS": "0",
         })
         packages = component_package_names(config)
         self.assertNotIn("docker-static", packages)
-        self.assertNotIn("cage", packages)
         self.assertNotIn("noto-sans-cjk-sc", packages)
 
 

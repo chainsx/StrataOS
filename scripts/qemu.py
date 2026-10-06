@@ -64,8 +64,6 @@ def qemu_disk_mib(config: dict[str, str]) -> int:
         enabled.add("diagnostics")
     if config.get("STRATA_ENABLE_DOCKER") == "1":
         enabled.add("docker")
-    if config.get("STRATA_ENABLE_GRAPHICS") == "1":
-        enabled.add("graphics")
     if config.get("STRATA_ENABLE_CJK_FONTS") == "1":
         enabled.add("fonts-cjk")
     if config.get("STRATA_ENABLE_FIREWALL") == "1":
@@ -160,17 +158,6 @@ def qemu_acceleration_args(
     return ["-accel", "tcg", "-cpu", fallback_cpu]
 
 
-def qemu_graphics_args(enabled: bool) -> list[str]:
-    """Expose a VirGL render node while keeping QEMU console-driven."""
-    if not enabled:
-        return ["-nographic"]
-    return [
-        "-display", "egl-headless,gl=on",
-        "-device", "virtio-gpu-gl-pci",
-        "-serial", "mon:stdio",
-    ]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
@@ -191,13 +178,7 @@ def main() -> None:
             raise BuildError(f"image not found: {image}")
 
         code_fd, vars_template = _find_uefi_firmware(arch)
-        gpu_enabled = os.environ.get("STRATA_QEMU_GPU", "virgl").lower() != "none"
-        vars_fd = prepare_vars(
-            vars_template,
-            output,
-            image,
-            "virgl" if gpu_enabled else "serial",
-        )
+        vars_fd = prepare_vars(vars_template, output, image, "serial")
 
         qemu = shutil.which(
             "qemu-system-x86_64" if arch == "x86_64" else "qemu-system-aarch64"
@@ -224,7 +205,7 @@ def main() -> None:
             command += ["-machine", "q35"]
         else:
             command += ["-machine", "virt"]
-        command += qemu_graphics_args(gpu_enabled)
+        command += ["-nographic"]
         command += qemu_acceleration_args(arch)
         run(command)
     except (BuildError, OSError, ValueError) as exc:
