@@ -112,10 +112,8 @@ lifecycle:
 | `openssh` | generated host identity |
 | `fail2ban` | `/var/lib/fail2ban` database |
 | `docker` | `/var/lib/docker` |
-| `flatpak` | `/var/lib/flatpak` |
-| `webui-flatpak` | `/var/lib/strataos/webui` Application Center data |
 
-Stateless components and WebUI adapters declare `storage.count=0`.
+Stateless components declare `storage.count=0`.
 
 ## Update Boundaries
 
@@ -140,39 +138,26 @@ default operating-system set. `network` owns iproute2, dhcpcd, iputils, PPP and
 the OpenRC network service. Python is isolated so its interpreter can be
 updated and audited independently. OpenSSH owns only `sshd`, SSH configuration
 and its persistent host-identity volume; SSH is enabled by default and can be
-disabled persistently from the WebUI. Fail2ban is a separate optional security
-component that depends explicitly on Python, OpenSSH and Firewall.
+controlled through OpenRC. Fail2ban is a separate optional security component
+that depends explicitly on Python, OpenSSH and Firewall.
 
-Docker, Flatpak, Graphics, CJK Fonts, Diagnostics, Web Console, WebUI, Firewall
-and Fail2ban are reference implementations of feature components. `graphics`
-owns the reusable Wayland compositor, VNC server and XKB data, while
-`fonts-cjk` owns the shared Noto CJK font. `diagnostics` contains htop and lsof.
-`web-console` owns ttyd, noVNC and their runtime libraries. `webui` depends on
-`network` and `web-console` and owns only the static management shell, common
-authentication/TLS proxies, system information and power control. Rootfs-only
-adapters own the capability-specific server surface: `webui-network`,
-`webui-openssh`, `webui-storage`, `webui-firewall`, `webui-docker`, and
-`webui-flatpak`. `webui-storage` owns external-partition discovery, format and
-mount APIs plus the persistent `/mnt` mount service; it never manages StrataOS
-component backing volumes as ordinary disks.
-Adapters depend on both the WebUI core and the component they manage, so a CGI
-cannot exist without its backend. `webui-flatpak` owns the persistent 4 GiB
-`/var/lib/strataos/webui` volume and never exposes the raw VNC listener on the
-network. `firewall` depends on `system-core` and `network`, owns `nftables`
-and `libnftnl`, and declares no data volume. The shared `libmnl` stays in
-`system-core` because both iproute2 and nftables link against it. Its persisted
-ruleset lives under `/etc/strataos/firewall` in the writable `/etc` overlay.
-It manages nftables presets and user-defined rules from the WebUI, applying
-changes immediately but requiring an explicit confirmation before they
+Docker, Graphics, CJK Fonts, Diagnostics, Firewall and Fail2ban are reference
+implementations of feature components. `graphics` owns the reusable Wayland
+compositor, VNC server and XKB data, while `fonts-cjk` owns the shared Noto CJK
+font. `diagnostics` contains htop and lsof. `firewall` depends on `system-core`
+and `network`, owns `nftables` and `libnftnl`, and declares no data volume. The
+shared `libmnl` stays in `system-core` because both iproute2 and nftables link
+against it. Its persisted ruleset lives under `/etc/strataos/firewall` in the
+writable `/etc` overlay. It manages nftables presets and user-defined rules,
+applying changes immediately but requiring an explicit confirmation before they
 persist; unconfirmed changes automatically roll back after a configurable
-timeout so a mistaken rule can never lock out SSH, WebUI, terminal, or VNC
-access. Its `strataos-firewall` OpenRC service declares `before docker` so
-rules are always in place before the Docker daemon starts; note that a
-component's `after`/`priority` fields only order squashfs assembly and are
-not the runtime boot-order mechanism, which OpenRC's `depend()` block
-provides instead.
+timeout so a mistaken rule can never lock out SSH access. Its
+`strataos-firewall` OpenRC service declares `before docker` so rules are always
+in place before the Docker daemon starts; note that a component's
+`after`/`priority` fields only order squashfs assembly and are not the runtime
+boot-order mechanism, which OpenRC's `depend()` block provides instead.
 
-The default full image therefore contains 20 components. Component root paths
+The default full image therefore contains 11 components. Component root paths
 are exposed to OverlayFS through short initramfs-only aliases; this is an
 implementation detail that prevents a long colon-separated `lowerdir` option
 from exceeding BusyBox's mount argument buffer after further component splits.

@@ -8,7 +8,7 @@ disk_priority=10
 
 depend() {
     need localmount strataos-storage
-    before docker strata-webui
+    before docker
 }
 
 start() {

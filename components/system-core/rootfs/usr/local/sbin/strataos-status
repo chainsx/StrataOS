@@ -30,6 +30,5 @@ rc-service sshd status || true
 rc-service docker status || true
 print
 docker info --format 'Docker: {{.ServerVersion}} / {{.Driver}}' 2>/dev/null || true
-flatpak --version
 print
 /usr/local/sbin/strataos-log-status || true

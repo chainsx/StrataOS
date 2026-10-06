@@ -1,160 +1,27 @@
 # StrataOS
 
 StrataOS is an immutable, modular GNU/Linux distribution compiled from
-upstream source code and targeting UEFI Class 3 devices.  The target
+upstream source code and targeting UEFI Class 3 devices or U-Boot platforms
+with extlinux support. The target
 system consists of OpenRC, Zsh, musl libc, the LLVM/Clang toolchain,
-Linux 6.18, and OpenSSH. Docker, Flatpak, headless graphics, and the
-browser management interface are selectable components.
+Linux 6.18, and OpenSSH. Docker and headless graphics are selectable
+components.
 
 This program is free software.  See the file LICENSE for copying
 conditions.
 
 ## System Architecture
 
-```
-                          STRATAOS  SYSTEM  ARCHITECTURE
-
-                              +------------------+
-                              |   UEFI Firmware  |
-                              +--------+---------+
-                                       |
-                                       v
-                     +-----------------+-----------------+
-                     |        Limine Bootloader          |
-                     +-----+------------------------+----+
-                           |                        |
-                           v                        v
-                  +--------+-------+       +--------+-------+
-                  | Linux Kernel   |       |   initramfs    |
-                  | (v6.18-strata) |       |  (newc cpio)   |
-                  +--------+-------+       +--------+-------+
-                           |                        |
-                           +----------+-------------+
-                                      |
-                                      v
-                        +-------------+-------------+
-                        |    strata-componentd     |
-                        |  (component orchestration)|
-                        +-------------+-------------+
-                                      |
-          +---------------------------+---------------------------+
-          |                           |                           |
-          v                           v                           v
-   +------+------+           +-------+-------+           +-------+-------+
-   | system-core |           |    docker     |           |    flatpak    |
-   |  component  |           |  component    |           |  component    |
-   +------+------+           +-------+-------+           +-------+-------+
-          |                           |                           |
-          v                           v                           v
-   +------+------+           +-------+-------+           +-------+-------+
-   |  SquashFS   |           |   SquashFS    |           |   SquashFS    |
-   |  rootfs     |           |   rootfs      |           |   rootfs      |
-   +------+------+           +-------+-------+           +-------+-------+
-          |                           |                           |
-          +---------------------------+---------------------------+
-                                      |
-                                      v
-                        +-------------+-------------+
-                        |       OverlayFS            |
-                        |  (composite writable root) |
-                        +-------------+-------------+
-                                      |
-                                      v
-                        +-------------+-------------+
-                        |        OpenRC init         |
-                        |   (sysinit -> boot ->      |
-                        |    default runlevels)      |
-                        +-------------+-------------+
-                                      |
-                +---------------------+---------------------+
-                |                     |                     |
-                v                     v                     v
-         +------+------+       +-----+-----+        +-----+-----+
-         |   D-Bus     |       |  Console  |        |   SSH     |
-         |   daemon    |       |  Getty    |        |  daemon   |
-         +------+------+       +-----+-----+        +-----+-----+
-                                      |
-                                      v
-                              +-------+-------+
-                              |  User Session  |
-                              |  (Zsh shell)   |
-                              +---------------+
-
-           OPTIONAL  COMPONENTS  (selected at build time)
-
-         +-------------------+       +-------------------+
-         |      docker       |       |      flatpak      |
-         |  (STRATA_ENABLE_  |       |  (STRATA_ENABLE_  |
-         |   DOCKER=1)       |       |   FLATPAK=1)      |
-         +-------------------+       +-------------------+
-         |  dockerd,         |       |  Flatpak +        |
-         |  containerd,      |       |  OSTree +         |
-         |  runc             |       |  Bubblewrap       |
-         +-------------------+       +-------------------+
-                                      |
-                +---------------------+---------------------+
-                |                     |                     |
-                v                     v                     v
-         +------+------+       +-----+-----+        +-----+-----+
-         |   D-Bus     |       |  Console  |        |   SSH     |
-         |   daemon    |       |  Getty    |        |  daemon   |
-         +------+------+       +-----+-----+        +-----+-----+
-                                      |
-                                      v
-                              +-------+-------+
-                              |  User Session  |
-                              |  (Zsh shell)   |
-                              +---------------+
-
-                         DISK  LAYOUT  (GPT)
-
-  +------------------------------------------------------------------+
-  |  Protective MBR                                                   |
-  +------------------------------------------------------------------+
-  |  Primary GPT Header  |  Partition Entries  |  ... unused ...      |
-  +------------------------------------------------------------------+
-  |  Partition 1: ESP (FAT32, 256 MiB)  |  Partition 2: DATA (ext4)  |
-  |  - EFI/BOOT/BOOTX64.EFI             |  - /strataos/components/   |
-  |  - strataos/kernel                  |  - /strataos/slots/        |
-  |  - strataos/initramfs.cpio.gz       |  - /strataos/volumes/      |
-  |  - strataos/config/*.conf           |  - /strataos/state/        |
-  |                                     |  - /strataos/transactions/ |
-  +------------------------------------------------------------------+
-  |  ... free space (auto-grown on first boot) ...                    |
-  +------------------------------------------------------------------+
-  |  Backup GPT Header  |  Partition Entries                           |
-  +------------------------------------------------------------------+
-
-                    BUILD  PIPELINE
-
-  packages/*/*.toml and toolchains/*.toml
-       |
-       v
-  fetch.py  -------------------->  output/dl/  (cached archives)
-       |
-       v
-  bootstrap_toolchain.py  ------>  output/toolchain/
-  (LLVM + musl + LLVM runtime)     |-- llvm/
-                                   |-- cmake/
-                                   |-- sysroot/
-       |
-       v
-  package_builder.py  ---------->  output/packages/<name>/root/
-  (host tools + target DAG)        output/host/
-       |
-       v
-  kernel.py  ------------------->  output/kernel/kernel
-       |
-       v
-  components.py  --------------->  output/components/*.squashfs
-  (SquashFS per component)         output/slot-A/
-       |
-       v
-  initramfs.py  ---------------->  output/initramfs/initramfs.cpio.gz
-       |
-       v
-  image.py  -------------------->  output/images/strataos-*-*.img
-  (native GPT writer)              output/images/*-qemu.qcow2
+```text
+STRATA_BOOTLOADER=limine-efi: UEFI -> Limine -> Linux kernel + initramfs
+STRATA_BOOTLOADER=extlinux:   U-Boot -> extlinux.conf -> Linux kernel + initramfs
+                                                        |
+                                                        v
+                        system-core + optional Docker / Graphics / CJK Fonts /
+                        Firewall / Fail2ban / Diagnostics component images
+                                                        |
+                                                        v
+                                             OverlayFS -> OpenRC
 ```
 
 ## Build Model
@@ -207,39 +74,22 @@ library, shell, OpenRC, logging and recovery utilities. The kernel image is
 booted from the ESP, while loadable drivers are packaged separately in the
 mandatory `kernel-modules` component. Network,
 Python and OpenSSH are separate default components so they can be updated and
-audited independently. SSH starts by default and can be stopped and disabled
-persistently from **TLS & SSH** in the WebUI.
+audited independently. SSH starts by default and can be stopped and disabled persistently through
+OpenRC.
 
 Additional components are selected at build time via configuration
 flags in `.config`:
 
 ```text
 STRATA_ENABLE_DOCKER=1     Include the Docker container runtime
-STRATA_ENABLE_FLATPAK=1    Include the Flatpak application framework
 STRATA_ENABLE_GRAPHICS=1   Include Wayland, Cage, and wayvnc
-STRATA_ENABLE_WEBUI=1      Include the WebUI and browser VNC client
 STRATA_ENABLE_FIREWALL=1   Include nftables and firewall policy
 STRATA_ENABLE_FAIL2BAN=1   Include SSH intrusion protection
 STRATA_ENABLE_CJK_FONTS=1  Include the Noto Sans CJK font component
 STRATA_ENABLE_DIAGNOSTICS=1 Include htop and lsof
+STRATA_BOOTLOADER=limine-efi Select the Limine UEFI image (or `extlinux`)
 ```
 
-The WebUI core requires `system-core`, `network`, and the `web-console`
-ttyd/noVNC runtime. Capability-specific server code is split into
-`webui-network`, `webui-openssh`, `webui-storage`, `webui-firewall`,
-`webui-docker`, and `webui-flatpak`; each adapter is selected only with the
-component it controls. `webui-storage` is selected with WebUI and provides
-external-partition discovery, formatting, mounting and persistent `/mnt`
-mounts.
-Its Docker page is shown only when the Docker adapter is active, and its
-Application Center is shown only when the Flatpak adapter, Graphics and
-Flatpak are active.
-The latter can run multiple installed Flatpak GUI applications in independent
-headless Wayland sessions rendered with Mesa (LLVM-backed for GPU-first rendering with software fallback) through a DRM render node and
-shown in separate browser windows through noVNC. The generic image enables the
-VirtIO GPU driver; physical targets must enable their device-specific DRM/KMS
-driver. See `docs/WEBUI.md`
-for operation and security constraints.
 
 When disabled, the corresponding packages are neither fetched nor
 compiled, and the disk image excludes their SquashFS images and data
@@ -296,28 +146,19 @@ Partition 2   ext4 data partition
   /strataos/transactions/     component update transactions
 ```
 
-The current full image is assembled from 20 independently attributed components:
+The current full image is assembled from independently attributed components:
 
 - default base: `system-core`, `kernel-modules`, `network`, `python`, and `openssh`;
 - security and diagnostics: `firewall`, `fail2ban`, and `diagnostics`;
-- application/runtime: `docker`, `flatpak`, `graphics`, and `fonts-cjk`;
-- browser management core: `web-console` and `webui`;
-- browser capability adapters: `webui-network`, `webui-openssh`, `webui-storage`,
-  `webui-firewall`, `webui-docker`, and `webui-flatpak`.
+- application/runtime: `docker`, `graphics`, and `fonts-cjk`.
 
 Optional components are included only when selected by the build configuration.
-The default defconfig enables all 18. Flatpak's system repository is persistent,
-but its per-application D-Bus/Wayland/VNC/WebSocket helper processes are started
-immediately before the first GUI application and stopped after the last one exits.
-
-Each component carries unified metadata, a package provenance list,
-and a `rootfs/` tree.  Components declare their own data volumes.
-Published images do not pre-seed component data images; the initramfs creates
-them on first activation and only permits growth thereafter. The current
-persistent owners are `system-core` (`/state`), `network` (DHCP leases),
-`openssh` (host identity), `fail2ban` (ban database), `docker`, `flatpak`, and
-`webui-flatpak` (Application Center data). Existing `webui` Application Center
-volumes are adopted by `webui-flatpak` during activation.
+Each component carries unified metadata, a package provenance list, and a
+`rootfs/` tree. Components declare their own data volumes. Published images do
+not pre-seed component data images; the initramfs creates them on first
+activation and only permits growth thereafter. The current persistent owners
+are `system-core` (`/state`), `network` (DHCP leases), `openssh` (host identity),
+`fail2ban` (ban database), and `docker`.
 
 Data volume redundancy can be configured as:
 
@@ -351,9 +192,9 @@ resize operations.  See `docs/LOGGING.md`.
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
-  python3 make patch perl rsync file unzip bc bison flex cpio \
-  gzip pigz bzip2 pbzip2 xz-utils gawk sed findutils tar \
-  zlib1g libstdc++6 appstream
+  python3 make patch perl rsync file unzip bc bison flex gettext gperf cpio \
+  gzip pigz bzip2 pbzip2 xz-utils gawk sed findutils tar which xsltproc docbook-xsl \
+  zlib1g libstdc++6 g++ groff-base
 ```
 
 Source extraction normalizes archive members whose paths begin with
@@ -497,8 +338,7 @@ system's own logic (make, cmake, ninja).
 
 - `defconfigs/x86_64_defconfig` / `defconfigs/arm64_defconfig` -- target
   architecture, version, and component enable flags
-  (`STRATA_ENABLE_DOCKER`, `STRATA_ENABLE_FLATPAK`,
-  `STRATA_ENABLE_GRAPHICS`, `STRATA_ENABLE_WEBUI`,
+  (`STRATA_ENABLE_DOCKER`, `STRATA_ENABLE_GRAPHICS`,
   `STRATA_ENABLE_FIREWALL`, `STRATA_ENABLE_FAIL2BAN`,
   `STRATA_ENABLE_CJK_FONTS`, `STRATA_ENABLE_DIAGNOSTICS`)
 - `configs/image/disk.conf` -- partition layout and sizing
@@ -521,7 +361,7 @@ keys.  Initial console or SSH access uses `root` with the temporary
 password `strata`.  The first interactive login requires changing that
 password and creating a named administrator account. OpenSSH is a default
 standalone component; root and password login stay enabled so the administrator
-can recover the system, while its boot service can be disabled from WebUI.
+can recover the system, while its boot service can be controlled through OpenRC.
 Component file
 names embed a full SHA-256 digest, and the slot manifest records
 component paths.  The current format does not yet provide publisher
@@ -529,12 +369,8 @@ signatures, Secure Boot, dm-verity, or anti-rollback protection.
 
 ## Validation Status
 
-The project includes tests for configuration, recipe DAG correctness,
-source option preflight, build-system compile probes, ELF dependency
-closure, component schema, shell syntax, kernel required symbols, the
-GPT writer, and storage policies. The current x86_64 image has completed a
-full upstream-source build, 18-component UEFI/QEMU cold boot, OpenRC service
-status audit, Flatpak idle-process audit, and orderly `poweroff` through
-volume flush and read-only remount. ARM64 builds, real-device testing, a real
-third-party Flatpak GUI session, storage corruption injection, and recovery
-drills remain release work. See `docs/VALIDATION.md`.
+The project includes tests for configuration, recipe DAG correctness, source
+option preflight, build-system compile probes, ELF dependency closure, component
+schema, shell syntax, kernel required symbols, the GPT writer, and storage
+policies. ARM64 builds, real-device testing, storage corruption injection, and
+recovery drills remain release work. See `docs/VALIDATION.md`.

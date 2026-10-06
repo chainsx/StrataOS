@@ -165,14 +165,10 @@ def component_package_names(config: dict[str, str]) -> list[str]:
 
     if enabled(config, "STRATA_ENABLE_DOCKER"):
         enabled_components.add("docker")
-    if enabled(config, "STRATA_ENABLE_FLATPAK"):
-        enabled_components.add("flatpak")
     if enabled(config, "STRATA_ENABLE_GRAPHICS"):
         enabled_components.add("graphics")
     if enabled(config, "STRATA_ENABLE_CJK_FONTS"):
         enabled_components.add("fonts-cjk")
-    if enabled(config, "STRATA_ENABLE_WEBUI"):
-        enabled_components.update(("web-console", "webui"))
     if enabled(config, "STRATA_ENABLE_FIREWALL"):
         enabled_components.add("firewall")
     if enabled(config, "STRATA_ENABLE_FAIL2BAN"):
@@ -1031,7 +1027,6 @@ class PackageBuilder:
             "dhcpcd": self.special_dhcpcd,
             "docker-static": self.special_docker,
             "host-glslang": self.special_host_glslang,
-            "novnc": self.special_novnc,
             "fail2ban": self.special_fail2ban,
             "host-python-module": self.special_host_python_module,
         }
@@ -1447,17 +1442,6 @@ class PackageBuilder:
         if missing:
             raise BuildError("Docker archive misses: " + ", ".join(missing))
 
-    def special_novnc(self, recipe: Recipe, source: Path | None, build: Path, root: Path, env: dict[str, str], context: dict[str, str]) -> None:
-        if source is None or not source.is_dir():
-            raise BuildError("noVNC source is missing")
-        destination = root / "usr/share/strata-webui/www/novnc"
-        destination.mkdir(parents=True, exist_ok=True)
-        for name in ("app", "core", "vendor"):
-            origin = source / name
-            if not origin.is_dir():
-                raise BuildError(f"noVNC archive misses {name}/")
-            shutil.copytree(origin, destination / name, symlinks=True)
-
     def build_local(
         self, recipe: Recipe, source: Path | None, build: Path, root: Path,
         env: dict[str, str], context: dict[str, str]
@@ -1630,22 +1614,13 @@ def verify_package_outputs(config_path: Path, output: Path) -> None:
         "diagnostics": ("usr/bin/htop", "usr/bin/lsof"),
         "firewall": ("usr/sbin/nft",),
         "fail2ban": ("usr/bin/fail2ban-server",),
-        "flatpak": ("usr/bin/flatpak", "usr/bin/ostree", "usr/bin/bwrap", "usr/bin/xdg-dbus-proxy"),
         "graphics": ("usr/bin/cage", "usr/bin/wayvnc"),
         "fonts-cjk": ("usr/share/fonts/strataos/NotoSansSC-Regular.otf",),
-        "web-console": ("usr/bin/ttyd", "usr/share/strata-webui/www/novnc/core/rfb.js"),
-        "webui": ("usr/sbin/strata-wsproxy", "usr/sbin/strata-authproxy"),
     }
     for component, paths in required.items():
-        if component == "flatpak" and not enabled(config, "STRATA_ENABLE_FLATPAK"):
-            continue
         if component == "graphics" and not enabled(config, "STRATA_ENABLE_GRAPHICS"):
             continue
         if component == "fonts-cjk" and not enabled(config, "STRATA_ENABLE_CJK_FONTS"):
-            continue
-        if component == "webui" and not enabled(config, "STRATA_ENABLE_WEBUI"):
-            continue
-        if component == "web-console" and not enabled(config, "STRATA_ENABLE_WEBUI"):
             continue
         if component == "firewall" and not enabled(config, "STRATA_ENABLE_FIREWALL"):
             continue

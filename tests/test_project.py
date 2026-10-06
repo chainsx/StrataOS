@@ -42,7 +42,7 @@ from components import (
 )
 from config import load, load_data, validate
 from fetch import inventory_entries, probe_source
-from image import write_gpt_image
+from image import extlinux_config, kernel_command_line, limine_config, write_gpt_image
 from initramfs import validate_util_linux_tools, write_newc
 from package_builder import (
     HOST_RECIPES, PackageBuilder, Recipe, apply_kconfig_fragment, component_package_names,
@@ -50,7 +50,8 @@ from package_builder import (
     verify_kconfig_fragment,
 )
 from recipe_audit import (
-    SPECIAL_CONTRACTS, _meson_options, audit_source_recipes, audit_static_recipes,
+    SPECIAL_CONTRACTS, _cmake_options, _meson_options, audit_source_recipes,
+    audit_static_recipes,
 )
 from build_policy import (
     RUNTIME_C_COMPILE_FLAGS, RUNTIME_CXX_COMPILE_FLAGS, RUNTIME_LINK_FLAGS,
@@ -100,7 +101,6 @@ class ProjectTests(unittest.TestCase):
             self.assertIn("-flto=thin", target_c_compile_flags(arch))
             self.assertIn("-flto=thin", target_link_flags(arch))
             self.assertIn("-Wl,--gc-sections", target_link_flags(arch))
-        self.assertEqual("none", load_recipes()["fuse3"].lto)
 
     def test_package_layout_is_owned_by_package_directories(self) -> None:
         recipes = load_recipes()
@@ -115,10 +115,20 @@ class ProjectTests(unittest.TestCase):
     def test_defconfigs_do_not_control_package_versions(self) -> None:
         for config in (self.x86, self.arm):
             for key in (
-                "STRATA_LINUX_VERSION", "STRATA_APPSTREAM_VERSION",
-                "STRATA_FLATPAK_VERSION", "STRATA_DOCKER_VERSION",
+                "STRATA_LINUX_VERSION", "STRATA_DOCKER_VERSION",
             ):
                 self.assertNotIn(key, config)
+
+    def test_bootloader_selection_requires_one_supported_mode(self) -> None:
+        self.assertEqual("limine-efi", self.x86["STRATA_BOOTLOADER"])
+        self.assertEqual("limine-efi", self.arm["STRATA_BOOTLOADER"])
+        extlinux = dict(self.x86)
+        extlinux["STRATA_BOOTLOADER"] = "extlinux"
+        extlinux.pop("STRATA_LIMINE_VERSION")
+        validate(extlinux, native=False)
+        invalid = dict(self.x86, STRATA_BOOTLOADER="grub-efi")
+        with self.assertRaisesRegex(BuildError, "limine-efi or extlinux"):
+            validate(invalid, native=False)
 
     def test_clang_wrapper_supports_autoconf_probes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -473,6 +483,18 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "STRATA_GLOBAL_LINK_POLICY"):
             PackageBuilder._check_configure_output(recipe, output, "cmake")
 
+    def test_cmake_source_audit_accepts_variables_checked_with_defined(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            source = Path(tmp_name)
+            (source / "CMakeLists.txt").write_text(
+                "if(NOT DEFINED LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR)\n"
+                "  message(FATAL_ERROR missing)\n"
+                "endif()\n"
+            )
+            self.assertIn(
+                "LLVM_EXTERNAL_SPIRV_HEADERS_SOURCE_DIR", _cmake_options(source)
+            )
+
     def test_host_cmake_does_not_pass_unused_cxx_cache_variables(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
@@ -498,6 +520,112 @@ class ProjectTests(unittest.TestCase):
             self.assertNotIn(f"-DCMAKE_CXX_COMPILER={builder.llvm_bin / 'clang++'}", configure)
             self.assertNotIn("-DCMAKE_CXX_FLAGS_INIT=-O2 -pipe -fPIC", configure)
             self.assertIn("-DZLIB_BUILD_EXAMPLES=OFF", configure)
+
+    def test_host_glslang_audits_binary_and_source_archives(self) -> None:
+        recipe = load_recipes()["host-glslang"]
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            source_archive = tmp / "source-archive"
+            source_archive.mkdir()
+            (source_archive / "CMakeLists.txt").write_text("project(glslang)\n")
+            report = audit_source_recipes(
+                {"host-glslang": recipe}, {"host-glslang": source_archive}
+            )
+            self.assertEqual("source-options-ok", report[0]["source_status"])
+
+            binary_archive = tmp / "binary-archive"
+            validator = binary_archive / "bin/glslangValidator"
+            validator.parent.mkdir(parents=True)
+            validator.write_text("prebuilt validator\n")
+            report = audit_source_recipes(
+                {"host-glslang": recipe}, {"host-glslang": binary_archive}
+            )
+            self.assertEqual("source-options-ok", report[0]["source_status"])
+
+    def test_host_glslang_keeps_x86_binary_path_and_builds_arm64_source(self) -> None:
+        recipe = load_recipes()["host-glslang"]
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            builder = PackageBuilder.__new__(PackageBuilder)
+            builder.host = tmp / "host"
+            builder.host_bin = builder.host / "bin"
+            builder.host_bin.mkdir(parents=True)
+
+            binary_source = tmp / "x86-source"
+            validator = binary_source / "bin/glslangValidator"
+            validator.parent.mkdir(parents=True)
+            validator.write_text("x86 release validator\n")
+            builder.arch = "x86_64"
+            builder.special_host_glslang(recipe, binary_source, tmp / "x86-build", tmp / "root", {}, {})
+            self.assertEqual(
+                "x86 release validator\n",
+                (builder.host_bin / "glslangValidator").read_text(),
+            )
+
+            builder.host = tmp / "arm-host"
+            builder.host_bin = builder.host / "bin"
+            builder.host_bin.mkdir(parents=True)
+            source = tmp / "arm-source"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text("project(glslang)\n")
+            builder.arch = "arm64"
+            builder.cmake_bin = tmp / "cmake/bin"
+            builder.llvm_bin = tmp / "llvm/bin"
+            builder.parallel = 2
+
+            def mock_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+                if "--install" in command:
+                    installed = builder.host_bin / "glslang"
+                    installed.write_text("arm source validator\n")
+                    (builder.host_bin / "glslangValidator").symlink_to(installed.name)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch("package_builder.run", side_effect=mock_run) as mocked_run:
+                builder.special_host_glslang(
+                    recipe, source, tmp / "arm-build", tmp / "root", {}, {}
+                )
+
+            configure = mocked_run.call_args_list[0].args[0]
+            self.assertIn("-DBUILD_EXTERNAL=OFF", configure)
+            self.assertIn("-DENABLE_OPT=OFF", configure)
+            self.assertIn("-DGLSLANG_TESTS=OFF", configure)
+            self.assertIn(f"-DCMAKE_CXX_COMPILER={builder.llvm_bin / 'clang++'}", configure)
+            self.assertTrue((builder.host_bin / "glslangValidator").is_file())
+
+    def test_glib_meson_tools_use_host_scripts_and_native_target_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            builder = PackageBuilder.__new__(PackageBuilder)
+            builder.arch = "arm64"
+            builder.output = tmp / "output"
+            builder.host_bin = builder.output / "host/bin"
+            builder.host_bin.mkdir(parents=True)
+            builder.sysroot = builder.output / "toolchain/sysroot"
+            target_bin = builder.sysroot / "usr/bin"
+            target_bin.mkdir(parents=True)
+            (builder.output / "generated").mkdir(parents=True)
+            run_target = builder.output / "generated/run-target"
+            run_target.write_text("#!/bin/sh\nexit 0\n")
+
+            script = target_bin / "glib-mkenums"
+            script.write_text("#!/usr/bin/env python3\nprint('glib-mkenums')\n")
+            script.chmod(0o755)
+            native_binary = target_bin / "glib-compile-resources"
+            native_binary.write_bytes(b"\\x7fELF target binary")
+            other_binary = target_bin / "glib-compile-schemas"
+            other_binary.write_bytes(b"\\x7fELF target binary")
+
+            with patch("package_builder.platform.machine", return_value="aarch64"):
+                builder.prepare_glib_build_tools()
+
+            script_wrapper = (builder.host_bin / "glib-mkenums").read_text()
+            self.assertIn(str(builder.host_bin / "python3"), script_wrapper)
+            self.assertIn(str(script), script_wrapper)
+            wrapper = (builder.host_bin / "glib-compile-resources").read_text()
+            self.assertIn(str(run_target), wrapper)
+            self.assertIn(str(native_binary), wrapper)
+            self.assertTrue(os.access(builder.host_bin / "glib-compile-resources", os.X_OK))
+            self.assertTrue(os.access(builder.host_bin / "glib-compile-schemas", os.X_OK))
 
     def test_target_cmake_does_not_pass_unused_install_libdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -565,53 +693,7 @@ class ProjectTests(unittest.TestCase):
             self.assertIn("INCLUDEDIR=/usr/include", install_args)
             self.assertIn(f"DESTDIR={tmp / 'root'}", install_args)
 
-    def test_appstream_declares_cross_build_metadata_patch(self) -> None:
-        recipe = load_recipes()["appstream"]
-        self.assertEqual(("appstream-cross-native-cli.patch",), recipe.patches)
-        self.assertTrue(recipe.patch_path(recipe.patches[0]).is_file())
 
-    def test_source_patches_are_applied_once_per_fingerprint(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            tmp = Path(tmp_name)
-            source = tmp / "source"
-            data = source / "data"
-            data.mkdir(parents=True)
-            meson_build = data / "meson.build"
-            meson_build.write_text(
-                "# Do not rely on an exe wrapper for rel-info, use the system one in that case\n"
-                "if meson.is_cross_build()\n"
-                "    dependency('appstream', version: '>=' + as_version, native: true,\n"
-                "               not_found_message: 'Native appstream required for cross-building')\n"
-                "    ascli_exe = find_program('appstreamcli')\n"
-                "endif\n\n"
-                "# NOTE: We do not translate the release notes on purpose here.\n"
-                "# If you do want to give translators a chance to translate them,\n"
-                "# ascli news-to-metainfo needs to produce a temporary file to translate\n"
-                "# prior to running (x)gettext on the file.\n"
-                "metainfo_with_relinfo = custom_target('gen-output',\n"
-                "    input : ['../NEWS', 'org.freedesktop.appstream.cli.metainfo.xml'],\n"
-                "    output : ['nol10n_withrelinfo_org.freedesktop.appstream.cli.metainfo.xml'],\n"
-                "    command : [ascli_exe, 'news-to-metainfo', '--limit=6', '@INPUT0@', '@INPUT1@', '@OUTPUT@']\n"
-                ")\n\n"
-                "metainfo_i18n = i18n.itstool_join(\n"
-                "    input:  metainfo_with_relinfo,\n"
-                "    output: 'org.freedesktop.appstream.cli.metainfo.xml',\n"
-                "    mo_targets: i18n_result[0],\n"
-                "    its_files: [join_paths(meson.current_source_dir(), 'its', 'metainfo.its')],\n"
-                "    install: true,\n"
-                "    install_dir: metainfo_dir,\n"
-                ")\n"
-            )
-            builder = PackageBuilder.__new__(PackageBuilder)
-            recipe = load_recipes()["appstream"]
-            builder.apply_source_patches(recipe, source)
-            builder.apply_source_patches(recipe, source)
-            patched = meson_build.read_text()
-            cross_build, _ = patched.split("else\n", 1)
-            self.assertIn("find_program('appstreamcli', native: true)", cross_build)
-            self.assertNotIn("dependency('appstream'", cross_build)
-            self.assertNotIn("i18n.itstool_join", cross_build)
-            self.assertTrue((source / ".strata-source-patches").is_file())
 
     def test_openssl_uses_absolute_target_compiler_without_cross_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -858,160 +940,26 @@ class ProjectTests(unittest.TestCase):
             )
             self.assertEqual(["first", "second"], sorted(_meson_options(source)))
 
-    def test_libsoup_3_6_uses_only_declared_meson_options(self) -> None:
-        recipe = load_recipes()["libsoup"]
-        self.assertNotIn("-Dexamples=false", recipe.configure_args)
-        self.assertIn("-Dinstalled_tests=false", recipe.configure_args)
-        for argument in (
-            "-Dtests=false", "-Ddocs=disabled", "-Dintrospection=disabled",
-            "-Dvapi=disabled", "-Dgssapi=disabled", "-Dntlm=disabled",
-            "-Dbrotli=disabled", "-Dsysprof=disabled", "-Dtls_check=false",
-        ):
-            self.assertIn(argument, recipe.configure_args)
 
-    def test_libsoup_source_preflight_matches_3_6_meson_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name) / "libsoup"
-            source.mkdir()
-            (source / "meson.build").write_text("project('libsoup', 'c')\n")
-            feature_options = (
-                "gssapi", "ntlm", "brotli", "introspection", "vapi",
-                "docs", "sysprof",
-            )
-            boolean_options = ("tls_check", "tests", "installed_tests")
-            blocks = [
-                f"option('{name}', type: 'feature', value: 'auto')"
-                for name in feature_options
-            ] + [
-                f"option('{name}', type: 'boolean', value: false)"
-                for name in boolean_options
-            ]
-            (source / "meson_options.txt").write_text("\n".join(blocks) + "\n")
-            recipe = load_recipes()["libsoup"]
-            report = audit_source_recipes({"libsoup": recipe}, {"libsoup": source})
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-            obsolete = replace(recipe, configure_args=("-Dexamples=false",))
-            with self.assertRaisesRegex(BuildError, "Meson option is not declared.*examples"):
-                audit_source_recipes({"libsoup": obsolete}, {"libsoup": source})
-
-    def test_libostree_2025_3_uses_release_autotools_layout(self) -> None:
-        recipe = load_recipes()["libostree"]
-        self.assertEqual("autotools", recipe.build_system)
-        self.assertIn("e2fsprogs", recipe.dependencies)
-        self.assertIn("gpgme", recipe.dependencies)
-        self.assertEqual(
-            ("GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config",),
-            recipe.environment,
-        )
-        for argument in (
-            "--with-curl", "--with-libarchive", "--with-crypto=openssl",
-            "--with-gpgme", "--without-soup", "--without-soup3",
-            "--without-libsystemd", "--disable-rofiles-fuse",
-            "--disable-installed-tests", "--disable-always-build-tests",
-        ):
-            self.assertIn(argument, recipe.configure_args)
-        self.assertFalse(any(argument.startswith("-D") for argument in recipe.configure_args))
 
     def test_libarchive_installs_pkgconfig_metadata_in_standard_libdir(self) -> None:
         recipe = load_recipes()["libarchive"]
         self.assertIn("-DCMAKE_INSTALL_LIBDIR=lib", recipe.configure_args)
 
-    def test_libostree_source_preflight_matches_2025_3_configure_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name) / "libostree"
-            source.mkdir()
-            configure = source / "configure"
-            recipe = load_recipes()["libostree"]
-            configure.write_text(
-                "#!/bin/sh\ncat <<'EOF'\n"
-                + "".join(f"  {argument}\n" for argument in recipe.configure_args)
-                + "EOF\n"
-            )
-            configure.chmod(0o755)
-            report = audit_source_recipes({"libostree": recipe}, {"libostree": source})
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-            obsolete = replace(
-                recipe, build_system="meson", configure_args=("-Dtests=false",),
-            )
-            with self.assertRaisesRegex(BuildError, "Meson source has no meson.build"):
-                audit_source_recipes({"libostree": obsolete}, {"libostree": source})
 
-    def test_gpgme_1_24_uses_single_language_list_switch(self) -> None:
-        recipe = load_recipes()["gpgme"]
-        self.assertIn("--enable-languages=", recipe.configure_args)
-        self.assertEqual(
-            ("GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config",),
-            recipe.environment,
-        )
-        self.assertEqual(("-D_LARGEFILE64_SOURCE",), recipe.cppflags)
-        for obsolete in (
-            "--disable-lang-cpp", "--disable-lang-python", "--disable-lang-qt",
-            "--disable-gpgconf", "--disable-doc",
-        ):
-            self.assertNotIn(obsolete, recipe.configure_args)
 
-    def test_gpgme_source_preflight_matches_1_24_configure_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name) / "gpgme"
-            source.mkdir()
-            configure = source / "configure"
-            configure.write_text(
-                "#!/bin/sh\n"
-                "cat <<'EOF'\n"
-                "  --disable-static        do not build static libraries\n"
-                "  --enable-shared         build shared libraries\n"
-                "  --disable-gpgconf-test  disable GPGCONF regression test\n"
-                "  --disable-gpg-test      disable GPG regression test\n"
-                "  --disable-gpgsm-test    disable GPGSM regression test\n"
-                "  --disable-g13-test      disable G13 regression test\n"
-                "  --enable-languages=LIST enable only specific language bindings\n"
-                "EOF\n"
-            )
-            configure.chmod(0o755)
-            recipe = load_recipes()["gpgme"]
-            report = audit_source_recipes({"gpgme": recipe}, {"gpgme": source})
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-            obsolete = replace(recipe, configure_args=("--disable-lang-cpp",))
-            with self.assertRaisesRegex(BuildError, "enable-lang-cpp"):
-                audit_source_recipes({"gpgme": obsolete}, {"gpgme": source})
 
-    def test_gcrypt_and_seccomp_recipes_do_not_invent_test_switches(self) -> None:
-        recipes = load_recipes()
-        for name in ("libassuan", "libgpg-error", "libseccomp"):
-            self.assertNotIn("--disable-tests", recipes[name].configure_args)
-            self.assertNotIn("--enable-tests", recipes[name].configure_args)
 
-    def test_libassuan_3_0_source_preflight_matches_configure_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name) / "libassuan"
-            source.mkdir()
-            configure = source / "configure"
-            configure.write_text(
-                "#!/bin/sh\n"
-                "cat <<'EOF'\n"
-                "  --disable-static        do not build static libraries\n"
-                "  --enable-shared         build shared libraries\n"
-                "  --disable-doc           do not build documentation\n"
-                "EOF\n"
-            )
-            configure.chmod(0o755)
-            recipe = load_recipes()["libassuan"]
-            self.assertEqual(
-                ("GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config",),
-                recipe.environment,
-            )
-            report = audit_source_recipes({"libassuan": recipe}, {"libassuan": source})
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-            obsolete = replace(recipe, configure_args=("--disable-tests",))
-            with self.assertRaisesRegex(BuildError, "enable-tests"):
-                audit_source_recipes({"libassuan": obsolete}, {"libassuan": source})
 
     def test_recipe_environment_expands_build_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             recipe = replace(
-                load_recipes()["libassuan"],
-                environment=("GPGRT_CONFIG={sysroot}/usr/bin/gpgrt-config",),
+                load_recipes()["zlib"],
+                configure_args=(),
+                build_args=(),
+                install_args=(),
+                environment=("PROBE_PATH={sysroot}/usr/bin/probe",),
             )
             builder = PackageBuilder.__new__(PackageBuilder)
             builder.output = tmp / "output"
@@ -1027,12 +975,12 @@ class ProjectTests(unittest.TestCase):
             builder.parallel = 1
             env = builder.base_env("target", recipe, {"sysroot": str(builder.sysroot)})
             self.assertEqual(
-                str(builder.sysroot / "usr/bin/gpgrt-config"),
-                env["GPGRT_CONFIG"],
+                str(builder.sysroot / "usr/bin/probe"),
+                env["PROBE_PATH"],
             )
             builder.write_effective_parameters(recipe, None, env, {"sysroot": str(builder.sysroot)})
-            report = builder.output / "reports/effective-build-parameters/libassuan.json"
-            self.assertIn('"GPGRT_CONFIG": "' + str(builder.sysroot / "usr/bin/gpgrt-config") + '"', report.read_text())
+            report = builder.output / "reports/effective-build-parameters/zlib.json"
+            self.assertIn('"PROBE_PATH": "' + str(builder.sysroot / "usr/bin/probe") + '"', report.read_text())
 
     def test_resume_reuses_only_matching_package_work(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1078,30 +1026,6 @@ class ProjectTests(unittest.TestCase):
         self.assertIn('parser.add_argument("--resume"', dispatcher)
         self.assertIn("RESUME ?= 1", makefile)
 
-    def test_related_autotools_recipes_match_testless_configure_contracts(self) -> None:
-        contracts = {
-            "libgpg-error": (
-                "--disable-static", "--enable-shared", "--disable-nls", "--disable-doc",
-            ),
-            "libseccomp": (
-                "--disable-static", "--enable-shared", "--disable-python",
-            ),
-        }
-        recipes = load_recipes()
-        with tempfile.TemporaryDirectory() as tmp_name:
-            root = Path(tmp_name)
-            for name, options in contracts.items():
-                source = root / name
-                source.mkdir()
-                configure = source / "configure"
-                configure.write_text(
-                    "#!/bin/sh\ncat <<'EOF'\n"
-                    + "".join(f"  {option}\n" for option in options)
-                    + "EOF\n"
-                )
-                configure.chmod(0o755)
-                report = audit_source_recipes({name: recipes[name]}, {name: source})
-                self.assertEqual("source-options-ok", report[0]["source_status"])
 
     def test_sqlite_3_50_1_uses_autoconf_bundle_options(self) -> None:
         recipe = load_recipes()["sqlite"]
@@ -1304,27 +1228,7 @@ class ProjectTests(unittest.TestCase):
             report = audit_source_recipes({"expat": recipe}, {"expat": source})
             self.assertEqual("source-options-ok", report[0]["source_status"])
 
-    def test_libyaml_0_2_uses_autotools_shared_library_option(self) -> None:
-        recipe = load_recipes()["libyaml"]
-        self.assertEqual("autotools", recipe.build_system)
-        self.assertEqual(("--enable-shared",), recipe.configure_args)
 
-    def test_libyaml_0_2_source_preflight_matches_autotools_contract(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_name:
-            source = Path(tmp_name) / "libyaml"
-            source.mkdir()
-            configure = source / "configure"
-            configure.write_text(
-                "#!/bin/sh\n"
-                "printf '%s\\n' '  --enable-shared[=PKGS]  build shared libraries'\n"
-            )
-            configure.chmod(0o755)
-            recipe = load_recipes()["libyaml"]
-            report = audit_source_recipes({"libyaml": recipe}, {"libyaml": source})
-            self.assertEqual("source-options-ok", report[0]["source_status"])
-            obsolete = replace(recipe, configure_args=("--disable-static",))
-            with self.assertRaisesRegex(BuildError, "enable-static"):
-                audit_source_recipes({"libyaml": obsolete}, {"libyaml": source})
 
     def test_cmake_preflight_still_rejects_undeclared_custom_cache_variable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1556,15 +1460,6 @@ class ProjectTests(unittest.TestCase):
         self.assertIn('recipe.build_system == "local"', source)
         self.assertIn('recipe.path.parent.rglob("*")', source)
 
-    def test_local_recipes_declare_build_test_and_install_phases(self) -> None:
-        recipe = load_recipes()["strata-webui"]
-        self.assertEqual("local", recipe.build_system)
-        self.assertEqual(("./build.sh",), recipe.build_args)
-        self.assertEqual(("./build.sh",), recipe.test_args)
-        self.assertEqual(("./build.sh",), recipe.install_args)
-        builder = (ROOT / "scripts/package_builder.py").read_text()
-        self.assertIn("def build_local(", builder)
-        self.assertNotIn("def special_strata_webui(", builder)
 
     def test_global_target_policy_forbids_host_runtime_fallbacks(self) -> None:
         self.assertIn("-fuse-ld=lld", TARGET_LINK_FLAGS)
@@ -1698,7 +1593,7 @@ class ProjectTests(unittest.TestCase):
         requested = component_package_names(self.x86)
         order = topological_order(recipes, requested)
         self.assertEqual(len(order), len(set(order)))
-        for name in ("busybox", "openrc", "zsh", "openssh", "flatpak", "docker-static"):
+        for name in ("busybox", "openrc", "zsh", "openssh", "docker-static"):
             self.assertIn(name, order)
 
     def test_component_package_ownership_is_explicit_and_unique(self) -> None:
@@ -1720,8 +1615,6 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual("system-core", owners["libmnl"])
         self.assertEqual("diagnostics", owners["htop"])
         self.assertEqual("fonts-cjk", owners["noto-sans-cjk-sc"])
-        self.assertEqual("web-console", owners["ttyd"])
-        self.assertEqual("flatpak", owners["flatpak"])
         self.assertEqual("docker", owners["docker-static"])
 
     def test_architecture_specific_sources_exist(self) -> None:
@@ -1858,6 +1751,33 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual(b"\x55\xaa", body[510:512])
             self.assertEqual(b"EFI PART", body[512:520])
             self.assertEqual(b"A" * 16, body[2048 * 512 : 2048 * 512 + 16])
+
+    def test_extlinux_configuration_uses_the_esp_kernel_and_initramfs(self) -> None:
+        command_line = kernel_command_line(
+            "arm64", "STRATA_ESP", "STRATA_DATA", "ext4"
+        )
+        configuration = extlinux_config(command_line)
+        self.assertIn("DEFAULT strataos", configuration)
+        self.assertIn("LINUX /strataos/kernel", configuration)
+        self.assertIn("INITRD /strataos/initramfs.cpio.gz", configuration)
+        self.assertIn(f"APPEND {command_line}", configuration)
+        self.assertIn("console=ttyAMA0,115200 console=tty0", configuration)
+        self.assertNotIn("clocksource=tsc", configuration)
+        self.assertIn(
+            "clocksource=tsc tsc=nowatchdog",
+            kernel_command_line("x86_64", "ESP", "DATA", "ext4"),
+        )
+        limine = limine_config(command_line)
+        self.assertIn("path: boot():/strataos/kernel", limine)
+        self.assertIn("module_path: boot():/strataos/initramfs.cpio.gz", limine)
+        self.assertIn(f"cmdline: {command_line}", limine)
+        image_builder = (ROOT / "scripts/image.py").read_text()
+        self.assertIn('if bootloader == "limine-efi":', image_builder)
+        self.assertIn('extlinux_dir = esp_root / "extlinux"', image_builder)
+        self.assertIn('esp_entries.append(extlinux_dir)', image_builder)
+        self.assertIn('esp_entries.append(esp_root / "EFI")', image_builder)
+        qemu = (ROOT / "scripts/qemu.py").read_text()
+        self.assertIn("make qemu requires STRATA_BOOTLOADER=limine-efi", qemu)
 
     def test_python_newc_writer_is_deterministic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1998,7 +1918,7 @@ class ProjectTests(unittest.TestCase):
         ).read_text()
         self.assertIn("passwd root", initial_setup)
         self.assertIn("useradd -m -U", initial_setup)
-        self.assertIn("wheel,audio,video,input,docker,flatpak,netdev", initial_setup)
+        self.assertIn("wheel,audio,video,input,docker,netdev", initial_setup)
 
         ssh = (
             ROOT / "components/openssh/rootfs/etc/ssh/sshd_config.d/10-strataos.conf"
@@ -2026,11 +1946,6 @@ class ProjectTests(unittest.TestCase):
             ROOT / "components/network/rootfs/etc/sysctl.d/50-network.conf"
         ).read_text()
         self.assertIn("net.ipv4.ping_group_range = 0 2147483647", network_sysctl)
-
-        flatpak_packages = (
-            ROOT / "components/flatpak/packages.list"
-        ).read_text().splitlines()
-        self.assertIn("gnupg", flatpak_packages)
 
         openrc_recipe = (ROOT / "packages/openrc/openrc.toml").read_text()
         openrc_patch = (
@@ -2075,354 +1990,8 @@ class ProjectTests(unittest.TestCase):
             self.assertEqual("usr/bin/passwd\n", (root / "usr/bin/passwd").read_text())
             verify_no_build_wrappers(root)
 
-    def test_webui_components_and_session_security_are_wired(self) -> None:
-        self.assertEqual("1", self.x86["STRATA_ENABLE_GRAPHICS"])
-        self.assertEqual("1", self.x86["STRATA_ENABLE_WEBUI"])
-        graphics = load_data(ROOT / "components/graphics/component.conf")
-        fonts = load_data(ROOT / "components/fonts-cjk/component.conf")
-        console = load_data(ROOT / "components/web-console/component.conf")
-        webui = load_data(ROOT / "components/webui/component.conf")
-        webui_flatpak = load_data(ROOT / "components/webui-flatpak/component.conf")
-        webui_storage = load_data(ROOT / "components/webui-storage/component.conf")
-        kernel_modules = load_data(ROOT / "components/kernel-modules/component.conf")
-        flatpak_component = load_data(ROOT / "components/flatpak/component.conf")
-        self.assertEqual("system-core", graphics["requires"])
-        self.assertEqual("system-core,graphics", fonts["requires"])
-        self.assertEqual("system-core", console["requires"])
-        self.assertEqual("system-core,network,web-console", webui["requires"])
-        self.assertEqual("0", webui["storage.count"])
-        self.assertEqual("/var/lib/strataos/webui", webui_flatpak["storage.0.mount"])
-        self.assertGreaterEqual(int(webui_flatpak["storage.0.initial_size_mib"]), 4096)
-        self.assertEqual("webui", webui_flatpak["storage.0.legacy_component"])
-        self.assertEqual("", flatpak_component["services"])
-        self.assertEqual("system-core,webui", webui_storage["requires"])
-        self.assertEqual("strataos-storage-mounts", webui_storage["services"])
-        self.assertEqual("kernel", kernel_modules["type"])
-        self.assertEqual("system-core", kernel_modules["requires"])
-        graphics_packages = (
-            ROOT / "components/graphics/packages.list"
-        ).read_text().splitlines()
-        for package in ("wayland", "mesa", "wlroots", "cage", "wayvnc"):
-            self.assertIn(package, graphics_packages)
-        self.assertNotIn("noto-sans-cjk-sc", graphics_packages)
-        self.assertEqual(
-            ["noto-sans-cjk-sc"],
-            (ROOT / "components/fonts-cjk/packages.list").read_text().splitlines(),
-        )
-        console_packages = (ROOT / "components/web-console/packages.list").read_text().splitlines()
-        self.assertEqual(["novnc", "libuv", "libwebsockets", "ttyd"], console_packages)
-        webui_packages = (ROOT / "components/webui/packages.list").read_text().splitlines()
-        self.assertEqual(["strata-webui"], webui_packages)
 
-        service = (ROOT / "components/webui/rootfs/etc/init.d/strata-webui").read_text()
-        session = (
-            ROOT / "components/webui-flatpak/rootfs/usr/libexec/strataos/web-flatpak-session"
-        ).read_text()
-        flatpak_services = (
-            ROOT / "components/webui-flatpak/rootfs/usr/libexec/strataos/web-flatpak-services"
-        ).read_text()
-        launcher = (
-            ROOT / "components/webui-flatpak/rootfs/usr/libexec/strataos/web-flatpak-launch"
-        ).read_text()
-        icon_resolver = (
-            ROOT / "components/webui-flatpak/rootfs/usr/libexec/strataos/web-flatpak-icon"
-        ).read_text()
-        flatpak_session_api = (
-            ROOT / "components/webui-flatpak/rootfs/usr/share/strata-webui/www/cgi-bin/session"
-        ).read_text()
-        flatpak_icon_api = (
-            ROOT / "components/webui-flatpak/rootfs/usr/share/strata-webui/www/cgi-bin/icon"
-        ).read_text()
-        installer = (
-            ROOT / "components/webui-flatpak/rootfs/usr/libexec/strataos/web-flatpak-install"
-        ).read_text()
-        cgi_common = (
-            ROOT / "components/webui/rootfs/usr/libexec/strataos/webui-cgi-common"
-        ).read_text()
-        websocket = (ROOT / "packages/strata-webui/src/wsproxy.c").read_text()
-        authproxy = (ROOT / "packages/strata-webui/src/authproxy.c").read_text()
-        authenticate = (ROOT / "packages/strata-webui/src/authenticate.c").read_text()
-        tlsproxy = (ROOT / "packages/strata-webui/src/tlsproxy.c").read_text()
-        frontend = (ROOT / "packages/strata-webui/assets/app.js").read_text()
-        page = (ROOT / "packages/strata-webui/assets/index.html").read_text()
-        viewer = (ROOT / "packages/strata-webui/assets/viewer.js").read_text()
-        viewer_page = (ROOT / "packages/strata-webui/assets/viewer.html").read_text()
-        remotes = (
-            ROOT / "components/webui-flatpak/rootfs/usr/share/strata-webui/www/cgi-bin/remotes"
-        ).read_text()
-        docker_api = (
-            ROOT / "components/webui-docker/rootfs/usr/share/strata-webui/www/cgi-bin/docker"
-        ).read_text()
-        docker_sources = (
-            ROOT / "components/webui-docker/rootfs/usr/share/strata-webui/www/cgi-bin/docker-sources"
-        ).read_text()
-        docker_terminal = (
-            ROOT / "components/webui-docker/rootfs/usr/libexec/strataos/web-docker-terminal"
-        ).read_text()
-        docker_pull = (
-            ROOT / "components/webui-docker/rootfs/usr/libexec/strataos/web-docker-pull"
-        ).read_text()
-        docker_pull_api = (
-            ROOT / "components/webui-docker/rootfs/usr/share/strata-webui/www/cgi-bin/docker-pull"
-        ).read_text()
-        docker_logs_api = (
-            ROOT / "components/webui-docker/rootfs/usr/share/strata-webui/www/cgi-bin/docker-logs"
-        ).read_text()
-        network_api = (
-            ROOT / "components/webui-network/rootfs/usr/share/strata-webui/www/cgi-bin/network"
-        ).read_text()
-        system_config_api = (
-            ROOT / "components/webui/rootfs/usr/share/strata-webui/www/cgi-bin/system-config"
-        ).read_text()
-        setup_api = (
-            ROOT / "components/webui/rootfs/usr/share/strata-webui/www/cgi-bin/setup"
-        ).read_text()
-        login_api = (
-            ROOT / "components/webui/rootfs/usr/share/strata-webui/www/cgi-bin/login"
-        ).read_text()
-        tls_api = (
-            ROOT / "components/webui/rootfs/usr/share/strata-webui/www/cgi-bin/tls"
-        ).read_text()
-        novnc_recipe = load_recipes()["novnc"]
-        novnc_patch = (
-            ROOT / "packages/novnc/patches/novnc-low-latency.patch"
-        ).read_text()
-        cage_resize_patch = (
-            ROOT / "packages/cage/patches/cage-remaximize-on-output-resize.patch"
-        ).read_text()
-        self.assertIn("/run/strata-webui/auth-sessions", service)
-        self.assertNotIn("access-token", service)
-        self.assertIn("command=/usr/sbin/httpd", service)
-        self.assertIn("--owner root:webapp --mode 0750 /var/lib/strataos/webui", service)
-        self.assertIn("HTTP_AUTHORIZATION#Bearer ", cgi_common)
-        self.assertIn("auth-sessions/$AUTH_TOKEN", cgi_common)
-        self.assertIn("flatpak info", session)
-        self.assertIn("/usr/bin/setsid su", session)
-        self.assertIn("chown root:webapp /var/lib/strataos/webui", session)
-        self.assertIn("chown -R webapp:webapp /var/lib/strataos/webui/home", session)
-        self.assertIn("required command is missing: /usr/bin/setsid", session)
-        self.assertIn('kill -TERM -"$pid"', session)
-        self.assertIn("stop-all", session)
-        self.assertIn('"$services" start', session)
-        self.assertIn("stop_services_if_idle", session)
-        self.assertIn("flatpak-session.lock", session)
-        self.assertIn("web-flatpak-session reap", session)
-        self.assertIn("strata-wsproxy", flatpak_services)
-        self.assertIn("strata-tlsproxy", flatpak_services)
-        self.assertNotIn("--exec /usr/sbin/strata-wsproxy --", service)
-        self.assertIn("vnc-ports", session)
-        self.assertIn('runtime/vnc-ready', session)
-        self.assertIn("timed out waiting for the graphical session", session)
-        self.assertNotIn("pkill -TERM -u webapp", session)
-        self.assertIn("WLR_BACKENDS=headless", launcher)
-        self.assertIn("WLR_RENDERER=gles2", launcher)
-        self.assertIn("WLR_RENDER_DRM_DEVICE", launcher)
-        self.assertIn("/dev/dri/renderD*", launcher)
-        self.assertIn("WLR_RENDERER_ALLOW_SOFTWARE=1", launcher)
-        self.assertIn("GALLIUM_DRIVER=softpipe", launcher)
-        self.assertIn("--env=LIBGL_ALWAYS_SOFTWARE=1", launcher)
-        self.assertIn("render-mode", session)
-        self.assertIn("gpu|software", session)
-        self.assertIn('"render_mode"', flatpak_session_api)
-        self.assertIn("XKB_CONFIG_ROOT=/usr/share/X11/xkb", launcher)
-        self.assertIn('wayvnc --max-fps=60 127.0.0.1 "$2"', launcher)
-        self.assertNotIn('wayvnc --gpu', launcher)
-        self.assertIn('wayvnc --max-fps=30 127.0.0.1 "$2"', launcher)
-        self.assertIn('$XDG_RUNTIME_DIR/vnc-ready', launcher)
-        self.assertIn("flatpak install --system --assumeyes --or-update $remote $ref", installer)
-        self.assertIn("flatpak remote-info --system", installer)
-        self.assertIn("FLATPAK_TTY_PROGRESS=1", installer)
-        self.assertIn("Installing\\|Updating", installer)
-        self.assertIn("/usr/bin/script", installer)
-        self.assertIn(
-            "--enable-scriptutils",
-            load_recipes()["util-linux"].configure_args,
-        )
-        self.assertIn("novnc-low-latency.patch", novnc_recipe.patches)
-        self.assertIn("MOUSE_MOVE_DELAY = 4", novnc_patch)
-        self.assertIn("requestRemoteResize", novnc_patch)
-        self.assertIn("_requestedRemoteSize", novnc_patch)
-        self.assertIn("cage-remaximize-on-output-resize.patch", load_recipes()["cage"].patches)
-        self.assertIn("view_position_all", cage_resize_patch)
-        self.assertIn("WLR_OUTPUT_STATE_MODE", cage_resize_patch)
-        self.assertIn("Sec-WebSocket-Accept", websocket)
-        self.assertNotIn("Sec-WebSocket-Protocol: binary", websocket)
-        self.assertIn("127.0.0.1", websocket)
-        self.assertIn("session_backend", websocket)
-        self.assertIn("vnc-port", websocket)
-        self.assertIn("attempt<150", websocket)
-        self.assertIn("-i 127.0.0.1 -p 7682", service)
-        self.assertIn("strata-authproxy", service)
-        self.assertIn("strata-tlsproxy", service)
-        self.assertIn("127.0.0.1:9091", service)
-        self.assertIn("tls-http.pid", service)
-        self.assertIn("tls-vnc.pid", service)
-        self.assertIn("tls-terminal.pid", service)
-        self.assertIn("strata_terminal=", authproxy)
-        self.assertIn("session_valid", authproxy)
-        self.assertIn("getspnam", authenticate)
-        self.assertIn("crypt_r", authenticate)
-        self.assertIn('getgrnam("wheel")', authenticate)
-        self.assertIn("constant_equal", authenticate)
-        self.assertIn("TLS1_2_VERSION", tlsproxy)
-        self.assertIn("SSL_CTX_use_certificate_chain_file", tlsproxy)
-        self.assertIn("SSL_CTX_check_private_key", tlsproxy)
-        self.assertIn("X-Strata-Authenticated", authproxy)
-        self.assertIn("/cgi-bin/terminal-auth", frontend)
-        self.assertIn("/cgi-bin/login?username=", frontend)
-        self.assertIn("/cgi-bin/logout", frontend)
-        self.assertIn("/cgi-bin/docker", frontend)
-        self.assertIn("/cgi-bin/docker-sources", frontend)
-        self.assertIn("/cgi-bin/docker-terminal", frontend)
-        self.assertIn("/cgi-bin/docker-pull", frontend)
-        self.assertIn("/cgi-bin/docker-logs", frontend)
-        self.assertIn("/cgi-bin/tls", frontend)
-        self.assertIn('data-page="security"', page)
-        self.assertIn("openssl req -x509 -newkey rsa:3072", tls_api)
-        self.assertIn("openssl x509 -in", tls_api)
-        self.assertIn("certificate and private key do not match", tls_api)
-        self.assertIn("install -m 0600 -o root -g root", tls_api)
-        self.assertIn("rc-service strata-webui restart", tls_api)
-        for action in ("pull", "create", "start", "stop", "restart", "remove"):
-            self.assertIn(action, docker_api)
-        self.assertIn("docker image ls", docker_api)
-        self.assertIn("registry-mirrors.list", docker_sources)
-        self.assertIn("rc-service docker restart", docker_sources)
-        self.assertIn("/usr/bin/docker exec -it", docker_terminal)
-        self.assertIn("/bin/bash", docker_terminal)
-        self.assertIn("container_shell", docker_terminal)
-        self.assertIn("/usr/bin/ttyd", docker_terminal)
-        self.assertNotIn("-W -O -m 1", service + docker_terminal)
-        self.assertIn("terminal listener did not become ready", docker_terminal)
-        self.assertIn("/proc/net/tcp6", docker_terminal)
-        self.assertIn("strata-tlsproxy", docker_terminal)
-        self.assertIn("-i 127.0.0.1", docker_terminal)
-        self.assertIn("docker pull $image", docker_pull)
-        self.assertIn("Pull complete", docker_pull)
-        self.assertIn("Downloading|Extracting", docker_pull)
-        self.assertIn("web-docker-pull start", docker_pull_api)
-        self.assertIn("docker logs --tail 500 --timestamps", docker_logs_api)
-        self.assertIn("/cgi-bin/power", frontend)
-        self.assertIn("/cgi-bin/install", frontend)
-        self.assertIn("/cgi-bin/remotes", frontend)
-        self.assertIn("configureDefaultFlathub", frontend)
-        self.assertIn("apps.no_source", frontend)
-        self.assertIn("/cgi-bin/session", frontend)
-        self.assertIn("/cgi-bin/features", frontend)
-        self.assertIn("/cgi-bin/firewall", frontend)
-        self.assertIn("/cgi-bin/icon", frontend)
-        self.assertIn("Authorization: `Bearer ${token}`", frontend)
-        self.assertIn("URL.createObjectURL(blob)", frontend)
-        self.assertIn("app-render-status", frontend)
-        self.assertNotIn("data-render-mode", frontend)
-        self.assertIn("web-flatpak-icon", flatpak_icon_api)
-        self.assertIn("applications/$app_id.desktop", icon_resolver)
-        self.assertIn("entry && /^Icon=/", icon_resolver)
-        self.assertIn("window.open", frontend)
-        self.assertNotIn("app-viewer-dialog", page + frontend)
-        self.assertIn("window.resizeTo", viewer)
-        self.assertIn("connection.resizeSession = true", viewer)
-        self.assertIn("requestResize", viewer)
-        self.assertIn("if (size === requestedSize) return", viewer)
-        self.assertIn("rfb.requestRemoteResize(width, height)", viewer)
-        self.assertIn("requestAnimationFrame(() => requestAnimationFrame", viewer)
-        self.assertIn("function even(value)", viewer)
-        self.assertIn("qualityProfiles", viewer)
-        self.assertIn("rfb.qualityLevel", viewer)
-        self.assertIn("rfb.compressionLevel", viewer)
-        self.assertIn("strata-webapp-resolution", viewer)
-        self.assertIn("window.addEventListener('resize', layoutScreen)", viewer)
-        self.assertIn("&session=", viewer)
-        self.assertIn("flatpak remote-modify --system", remotes)
-        self.assertIn("flatpak remote-delete --system", remotes)
-        self.assertIn("configure-default", remotes)
-        self.assertIn("flatpak remote-add --system --if-not-exists", remotes)
-        self.assertIn("--show-disabled --columns=name,title,url,options", remotes)
-        self.assertNotIn("requestPointerLock", frontend)
-        self.assertNotIn("sendPointerEvent", frontend)
-        for ratio in ("16/9", "16/10", "4/3", "3/2", "21/9"):
-            self.assertIn(f'value="{ratio}"', viewer_page)
-        for resolution in ("1280x720", "1600x900", "1920x1080"):
-            self.assertIn(f'value="{resolution}"', viewer_page)
-        for quality in ("balanced", "high", "best"):
-            self.assertIn(f'value="{quality}"', viewer_page)
-        self.assertNotIn('value="relative"', viewer_page)
-        self.assertNotIn('id="pointer-mode"', viewer_page)
-        self.assertIn('data-page="docker" hidden', page)
-        self.assertIn('data-page="apps" hidden', page)
-        self.assertIn("Application Center", page)
-        self.assertIn("escapeHtml", frontend)
-        self.assertIn('<html lang="en" data-theme="light">', page)
-        self.assertNotIn("terminal-placeholder", page + frontend)
-        self.assertNotRegex(page + viewer_page + frontend + viewer, r"[\u4e00-\u9fff]")
-        self.assertNotIn("eval ", session)
-        self.assertIn("apply_pppoe", network_api)
-        self.assertIn("apply_ipv6_static", network_api)
-        self.assertIn("create_swap", system_config_api)
-        self.assertIn("/state/swap/strata.swap", system_config_api)
-        self.assertIn("ssh_service)", system_config_api)
-        self.assertIn("rc-update add sshd default", system_config_api)
-        self.assertIn("rc-update del sshd default", system_config_api)
-        self.assertIn('id="ssh-service-toggle"', page)
-        self.assertIn("action: 'ssh_service'", frontend)
-        self.assertIn("setup_required", login_api)
-        self.assertIn("/usr/sbin/useradd", setup_api)
-        self.assertIn("/usr/sbin/chpasswd", setup_api)
-        self.assertIn("initial-setup-complete", setup_api)
-        self.assertIn("/cgi-bin/setup", frontend)
-        self.assertNotIn("volume-configs", page + frontend)
-
-        initial_setup = (
-            ROOT / "components/system-core/rootfs/usr/libexec/strataos/initial-setup"
-        ).read_text()
-        self.assertIn("after_hash", initial_setup)
-        self.assertIn("'$6$strataos$'*", initial_setup)
-        core = load_data(ROOT / "components/system-core/component.conf")
-        self.assertEqual("5", core["storage.0.bind.count"])
-        self.assertEqual("/etc", core["storage.0.bind.4.target"])
-        self.assertEqual("overlay", core["storage.0.bind.4.seed"])
-        componentd = (ROOT / "initramfs/bin/strata-componentd").read_text()
-        self.assertIn("cannot mount persistent overlay", componentd)
-        self.assertIn("/run/strataos/binds.tsv", componentd)
-
-        network_devices = (
-            ROOT / "components/network/rootfs/usr/libexec/strataos/network-devices"
-        ).read_text()
-        self.assertIn('exit "$failed"', network_devices)
-        network_service = (
-            ROOT / "components/network/rootfs/etc/init.d/strataos-network"
-        ).read_text()
-        self.assertIn('pidfile="/run/pid"', network_service)
-        swap_service = (
-            ROOT / "components/system-core/rootfs/etc/init.d/strataos-swap"
-        ).read_text()
-        self.assertIn('swapon -p "$zram_priority"', swap_service)
-        self.assertIn('swapon -p "$disk_priority"', swap_service)
-        self.assertNotIn("drop_caches", swap_service)
-
-        kernel_x86 = (ROOT / "configs/kernel/x86_64/kernel.config").read_text()
-        kernel_arm = (ROOT / "configs/kernel/arm64/kernel.config").read_text()
-        self.assertIn("CONFIG_DRM=y", kernel_x86)
-        self.assertIn("CONFIG_DRM_VIRTIO_GPU=y", kernel_x86)
-        self.assertIn("CONFIG_PPPOE=y", kernel_x86)
-        self.assertIn("CONFIG_PPPOE=y", kernel_arm)
-        self.assertIn("CONFIG_ZRAM=y", kernel_x86)
-        self.assertIn("CONFIG_ZRAM=y", kernel_arm)
-        self.assertIn("ppp", (ROOT / "components/network/packages.list").read_text().splitlines())
-        self.assertIn("CONFIG_DRM=y", kernel_arm)
-        self.assertIn("CONFIG_DRM_VIRTIO_GPU=y", kernel_arm)
-        self.assertIn("-Drenderers=gles2", load_recipes()["wlroots"].configure_args)
-        self.assertIn("-Dallocators=gbm", load_recipes()["wlroots"].configure_args)
-        self.assertIn("-Dscreencopy-dmabuf=enabled", load_recipes()["wayvnc"].configure_args)
-        self.assertIn("mesa", load_recipes()["wlroots"].dependencies)
-
-        xkb_recipe = (ROOT / "packages/libxkbcommon/libxkbcommon.toml").read_text()
-        self.assertIn("-Dxkb-config-root=/usr/share/X11/xkb", xkb_recipe)
-        font_recipe = load_recipes()["noto-sans-cjk-sc"]
-        self.assertEqual("font-file", font_recipe.special)
-        self.assertEqual("file", font_recipe.source_for_arch("x86_64").archive)
-
-    def test_firewall_component_and_webui_integration_are_wired(self) -> None:
+    def test_firewall_component_is_wired(self) -> None:
         self.assertEqual("1", self.x86["STRATA_ENABLE_FIREWALL"])
         self.assertEqual("1", self.arm["STRATA_ENABLE_FIREWALL"])
 
@@ -2433,97 +2002,24 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual("0", fw["storage.count"])
 
         fw_packages = (ROOT / "components/firewall/packages.list").read_text()
-        core_packages = (
-            ROOT / "components/system-core/packages.list"
-        ).read_text().splitlines()
+        core_packages = (ROOT / "components/system-core/packages.list").read_text().splitlines()
         for pkg in ("nftables", "libnftnl"):
             self.assertNotIn(pkg, core_packages)
             self.assertIn(f"\n{pkg}\n", f"\n{fw_packages}\n")
         for pkg in ("gmp", "readline", "libmnl"):
             self.assertIn(pkg, core_packages)
 
-        init = (
-            ROOT / "components/firewall/rootfs/etc/init.d/strataos-firewall"
-        ).read_text()
+        init = (ROOT / "components/firewall/rootfs/etc/init.d/strataos-firewall").read_text()
         self.assertIn("before docker", init)
         self.assertIn("nft -f", init)
 
-        common = (
-            ROOT / "components/firewall/rootfs/usr/libexec/strataos/firewall-common"
-        ).read_text()
+        common = (ROOT / "components/firewall/rootfs/usr/libexec/strataos/firewall-common").read_text()
         self.assertIn("fw_deny_blocks_protected", common)
         self.assertIn("fw_protected_ports", common)
-        for port in ("22", "9090", "6080", "7681"):
-            self.assertIn(port, common)
+        self.assertIn("22", common)
         self.assertIn("FW_ROLLBACK_DEADLINE", common)
         self.assertIn('rm -f "$FW_CANDIDATE"', common)
 
-        cgi = (
-            ROOT / "components/webui-firewall/rootfs/usr/share/strata-webui/www/cgi-bin/firewall"
-        ).read_text()
-        # Protected-port rejection uses the range-aware helper
-        self.assertIn("fw_deny_blocks_protected", cgi)
-        # remove_rule validates protocol before using it in grep
-        self.assertIn('case "$proto" in tcp|udp)', cgi)
-        # remove_rule validates action_type (not just proto+port)
-        remove_section = cgi[cgi.index("remove_rule)"):]
-        self.assertIn('case "$rule_action" in allow|deny)', remove_section)
-        # remove_rule only calls apply_candidate when a rule was actually removed
-        self.assertIn("cmp -s", cgi)
-        # status JSON includes remaining and presets
-        self.assertIn('"remaining"', cgi)
-        self.assertIn('"presets"', cgi)
-        # apply_candidate cleans up FW_CANDIDATE on validation failure
-        apply_section = cgi[cgi.index("apply_candidate()"):]
-        self.assertIn('rm -f "$FW_CANDIDATE"', apply_section)
-        # Port validation rejects leading/trailing dashes
-        self.assertIn("[-]*|*[-]", cgi)
-
-        features = (
-            ROOT / "components/webui/rootfs/usr/share/strata-webui/www/cgi-bin/features"
-        ).read_text()
-        self.assertIn("firewall", features)
-
-        frontend = (ROOT / "packages/strata-webui/assets/app.js").read_text()
-        self.assertIn("status.presets", frontend)
-        self.assertIn("status.remaining", frontend)
-        self.assertIn("actionType", frontend)
-        self.assertIn("action_type", frontend)
-        # Hardcoded preset constant must not remain (presets now come from API)
-        self.assertNotIn("firewallPresets = [", frontend)
-
-
-        rootfs_source = (ROOT / "scripts/rootfs.py").read_text()
-        self.assertIn("webapp:x:204:204", rootfs_source)
-        busybox = (ROOT / "packages/busybox/configs/busybox.fragment").read_text()
-        self.assertIn("CONFIG_HTTPD=y", busybox)
-        self.assertIn("CONFIG_FEATURE_HTTPD_CGI=y", busybox)
-
-        qemu = (ROOT / "scripts/qemu.py").read_text()
-        self.assertIn("hostfwd=tcp::9090-:9090", qemu)
-        self.assertIn("hostfwd=tcp::7681-:7681", qemu)
-        self.assertIn("hostfwd=tcp::6080-:6080", qemu)
-        self.assertIn("range(7690, 7790)", qemu)
-        self.assertIn('f"hostfwd=tcp::{port}-:{port}"', qemu)
-
-        self.assertIn("CONFIG_SETSID=y", busybox)
-
-    def test_docker_pull_progress_parser_reports_fraction_and_percentage(self) -> None:
-        helper = ROOT / "components/webui-docker/rootfs/usr/libexec/strataos/web-docker-pull"
-        with tempfile.TemporaryDirectory() as tmp_name:
-            state = Path(tmp_name)
-            (state / "state").write_text("running\n")
-            (state / "image").write_text("example/image:latest\n")
-            (state / "docker.log").write_text(
-                "a1b2c3: Downloading [======>] 5MB/10MB\r"
-                "d4e5f6: Pull complete\r"
-            )
-            environment = os.environ.copy()
-            environment["STRATA_DOCKER_PULL_STATE_DIR"] = str(state)
-            status = subprocess.check_output(
-                [helper, "status"], env=environment, text=True,
-            ).rstrip("\n").split("\t")
-            self.assertEqual(["running", "70", "example/image:latest", "1/2", ""], status)
 
     def test_development_config_scripts_are_not_shipped_at_runtime(self) -> None:
         self.assertFalse(runtime_path("usr/bin/curl-config", Path("curl-config")))
@@ -2622,13 +2118,12 @@ class ProjectTests(unittest.TestCase):
         self.assertNotIn("openssh", core)
         self.assertNotIn("fail2ban", core)
         self.assertIn("sqlite", core)
-        self.assertNotIn("sqlite", (ROOT / "components/flatpak/packages.list").read_text().splitlines())
         self.assertEqual("sshd", load_data(ROOT / "components/openssh/component.conf")["services"])
         fail2ban = load_data(ROOT / "components/fail2ban/component.conf")
         self.assertEqual("fail2ban", fail2ban["services"])
         self.assertEqual("system-core,network,python,openssh,firewall", fail2ban["requires"])
 
-    def test_arm64_and_x86_share_webui_network_kernel_requirements(self) -> None:
+    def test_arm64_and_x86_share_network_kernel_requirements(self) -> None:
         required = {
             line.split()[0] for line in (ROOT / "configs/kernel/required-symbols.list").read_text().splitlines()
             if line and not line.startswith("#")
@@ -2643,45 +2138,15 @@ class ProjectTests(unittest.TestCase):
     def test_optional_application_components_are_selected_independently(self) -> None:
         config = dict(self.x86)
         config.update({
-            "STRATA_ENABLE_DOCKER": "0", "STRATA_ENABLE_FLATPAK": "0",
-            "STRATA_ENABLE_GRAPHICS": "0", "STRATA_ENABLE_CJK_FONTS": "0",
-            "STRATA_ENABLE_WEBUI": "1",
+            "STRATA_ENABLE_DOCKER": "0",
+            "STRATA_ENABLE_GRAPHICS": "0",
+            "STRATA_ENABLE_CJK_FONTS": "0",
         })
         packages = component_package_names(config)
         self.assertNotIn("docker-static", packages)
-        self.assertNotIn("flatpak", packages)
-        self.assertIn("ttyd", packages)
-        self.assertIn("strata-webui", packages)
+        self.assertNotIn("cage", packages)
+        self.assertNotIn("noto-sans-cjk-sc", packages)
 
-    def test_webui_defaults_and_signed_flatpak_descriptors(self) -> None:
-        html = (ROOT / "packages/strata-webui/assets/index.html").read_text()
-        app = (ROOT / "packages/strata-webui/assets/app.js").read_text()
-        self.assertIn('<html lang="en" data-theme="light">', html)
-        self.assertIn("let theme = localStorage.getItem('strata-theme') || 'light';", app)
-        self.assertIn("flathub.flatpakrepo", html)
-        self.assertNotIn("bfsu", html.lower())
-        settings_start = html.index('id="page-settings"')
-        settings_end = html.index('</section>', settings_start)
-        hostname_form = html.index('id="hostname-form"')
-        self.assertLess(settings_start, hostname_form)
-        self.assertLess(hostname_form, settings_end)
-        self.assertIn('id="page-storage"', html)
-        self.assertIn('data-page="storage"', html)
-        self.assertIn("loadAppIcons", app)
-        self.assertIn("/cgi-bin/storage", app)
-        self.assertIn("firewall.preset.management-only.desc", app)
-
-    def test_flatpak_declares_hermetic_host_pyparsing(self) -> None:
-        recipes = load_recipes()
-        module = recipes["host-pyparsing"]
-        self.assertEqual("host", module.kind)
-        self.assertEqual("host-python-module", module.special)
-        self.assertEqual(("host-python",), module.dependencies)
-        self.assertIn("host-pyparsing", recipes["flatpak"].dependencies)
-        self.assertNotIn("host-pyparsing", HOST_RECIPES)
-        builder = (ROOT / "scripts/package_builder.py").read_text()
-        self.assertIn('"host-python-module": self.special_host_python_module', builder)
-        self.assertIn('"import {module_name}"', builder)
 
 
 if __name__ == "__main__":

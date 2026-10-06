@@ -21,5 +21,5 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 This license covers only the project-authored build scripts and configuration.
-Downloaded Linux, LLVM, Docker, Flatpak, OpenRC, OpenSSH and
+Downloaded Linux, LLVM, Docker, OpenRC, OpenSSH and
 other third-party components retain their respective upstream licenses.

@@ -223,7 +223,7 @@ BusyBox or pull in extra login/service-management dependencies. 4.0.5 adds
 ### nftables JSON output
 
 `nftables` is built with `--with-json` and an explicit `jansson` dependency
-so the WebUI's Firewall CGI can query `nft -j list ruleset` instead of
+so firewall tooling can query `nft -j list ruleset` instead of
 scraping plain-text `nft list ruleset` output. `libmnl`, `libnftnl`,
 `gmp`, `readline` and `jansson` are audited under the same generic
 autotools/CMake layers as every other target package; no special-case

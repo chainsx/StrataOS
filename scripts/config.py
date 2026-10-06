@@ -15,7 +15,7 @@ REQUIRED = {
     "STRATA_LLVM_VERSION",
     "STRATA_MUSL_VERSION",
     "STRATA_CMAKE_VERSION",
-    "STRATA_LIMINE_VERSION",
+    "STRATA_BOOTLOADER",
     "STRATA_DEFAULT_HOSTNAME",
 }
 
@@ -131,6 +131,11 @@ def validate_component_policy() -> None:
 def validate(config: dict[str, str], *, native: bool = True) -> None:
     if config["STRATA_ARCH"] not in {"x86_64", "arm64"}:
         raise BuildError("STRATA_ARCH must be x86_64 or arm64")
+    bootloader = config["STRATA_BOOTLOADER"]
+    if bootloader not in {"limine-efi", "extlinux"}:
+        raise BuildError("STRATA_BOOTLOADER must be limine-efi or extlinux")
+    if bootloader == "limine-efi" and not config.get("STRATA_LIMINE_VERSION"):
+        raise BuildError("STRATA_LIMINE_VERSION is required for STRATA_BOOTLOADER=limine-efi")
     removed = sorted({"STRATA_DEFAULT_USER", "STRATA_ENABLE_OPENSSH"} & config.keys())
     if removed:
         raise BuildError(
@@ -145,8 +150,8 @@ def validate(config: dict[str, str], *, native: bool = True) -> None:
         if key in config and as_int(config, key) < 0:
             raise BuildError(f"{key} must not be negative")
     for key in (
-        "STRATA_ENABLE_FLATPAK", "STRATA_ENABLE_DOCKER",
-        "STRATA_ENABLE_GRAPHICS", "STRATA_ENABLE_WEBUI", "STRATA_ENABLE_FIREWALL",
+        "STRATA_ENABLE_DOCKER", "STRATA_ENABLE_GRAPHICS",
+        "STRATA_ENABLE_FIREWALL",
         "STRATA_ENABLE_FAIL2BAN", "STRATA_ENABLE_CJK_FONTS",
         "STRATA_ENABLE_DIAGNOSTICS",
     ):

@@ -1,9 +1,0 @@
-name = "bubblewrap"
-version = "0.11.0"
-kind = "target"
-build_system = "meson"
-dependencies = ["libcap"]
-configure_args = ["-Dtests=false", "-Dman=disabled", "-Dselinux=disabled"]
-
-[source]
-url = "https://github.com/containers/bubblewrap/releases/download/v{version}/bubblewrap-{version}.tar.xz"

@@ -47,7 +47,7 @@ while :; do
         continue
     fi
     if /usr/sbin/useradd -m -U -s /bin/zsh \
-        -G wheel,audio,video,input,docker,flatpak,netdev "$username"; then
+        -G wheel,audio,video,input,docker,netdev "$username"; then
         break
     fi
     printf 'Unable to create user %s; choose another name.\n' "$username" >&2

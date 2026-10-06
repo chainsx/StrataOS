@@ -49,7 +49,7 @@ Add the corresponding flag to `defconfigs/x86_64_defconfig` and
 `scripts/config.py`:
 
 ```python
-for key in ("STRATA_ENABLE_FLATPAK", "STRATA_ENABLE_DOCKER",
+for key in ("STRATA_ENABLE_DOCKER",
             "STRATA_ENABLE_DIAGNOSTICS"):
     ...
 ```
@@ -64,12 +64,6 @@ if config.get("STRATA_ENABLE_DIAGNOSTICS") == "1":
     enabled.add("diagnostics")
 ```
 
-The built-in WebUI core requires system-core, network and web-console for
-system information and the terminal. Network, OpenSSH, Firewall, Docker and
-Flatpak CGI/helpers belong to their `webui-*` adapter components. The Flatpak
-adapter is selected only when the active build includes WebUI, Graphics and
-Flatpak. Keep hard dependencies only for components which cannot provide useful
-standalone functionality.
 
 ## Modifying the Kernel
 
@@ -126,7 +120,7 @@ Network, Python and OpenSSH are default standalone components. `python` owns
 only the target interpreter, `network` owns the normal network userspace and
 service, while `openssh` owns only the SSH server and persistent host identity.
 Fail2ban is independently selected by `STRATA_ENABLE_FAIL2BAN`. SSH runtime
-startup remains optional and is controlled through OpenRC or the WebUI switch.
+startup remains optional and is controlled through OpenRC.
 
 ## Modifying BusyBox
 

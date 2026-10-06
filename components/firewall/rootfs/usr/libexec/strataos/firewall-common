@@ -37,10 +37,9 @@ fw_confirm_timeout() {
     fw_kv_get "$FW_CONF" confirm_timeout 90
 }
 
-# Protected management ports that a rule or preset may never block.
-# Covers SSH (22), WebUI (9090), noVNC (6080), ttyd (7681), VNC range (7690-7789).
+# SSH is a protected management port that a rule or preset may never block.
 fw_protected_ports() {
-    printf '22 9090 6080 7681\n'
+    printf '22\n'
 }
 
 fw_is_protected_port() {
@@ -48,7 +47,6 @@ fw_is_protected_port() {
     for protected in $(fw_protected_ports); do
         [ "$port" = "$protected" ] && return 0
     done
-    [ "$port" -ge 7690 ] 2>/dev/null && [ "$port" -le 7789 ] 2>/dev/null && return 0
     return 1
 }
 
@@ -63,8 +61,6 @@ fw_deny_blocks_protected() {
             for p in $(fw_protected_ports); do
                 [ "$p" -ge "$lo" ] 2>/dev/null && [ "$p" -le "$hi" ] 2>/dev/null && return 0
             done
-            # Overlap with VNC range 7690-7789: overlap unless hi<7690 or lo>7789
-            { [ "$hi" -lt 7690 ] 2>/dev/null || [ "$lo" -gt 7789 ] 2>/dev/null; } || return 0
             return 1
             ;;
         *)

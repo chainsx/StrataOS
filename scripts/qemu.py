@@ -64,23 +64,12 @@ def qemu_disk_mib(config: dict[str, str]) -> int:
         enabled.add("diagnostics")
     if config.get("STRATA_ENABLE_DOCKER") == "1":
         enabled.add("docker")
-    if config.get("STRATA_ENABLE_FLATPAK") == "1":
-        enabled.add("flatpak")
     if config.get("STRATA_ENABLE_GRAPHICS") == "1":
         enabled.add("graphics")
     if config.get("STRATA_ENABLE_CJK_FONTS") == "1":
         enabled.add("fonts-cjk")
-    if config.get("STRATA_ENABLE_WEBUI") == "1":
-        enabled.update(("web-console", "webui"))
-        enabled.update(("webui-network", "webui-openssh"))
-        if config.get("STRATA_ENABLE_DOCKER") == "1":
-            enabled.add("webui-docker")
-        if config.get("STRATA_ENABLE_FLATPAK") == "1" and config.get("STRATA_ENABLE_GRAPHICS") == "1":
-            enabled.add("webui-flatpak")
     if config.get("STRATA_ENABLE_FIREWALL") == "1":
         enabled.add("firewall")
-        if config.get("STRATA_ENABLE_WEBUI") == "1":
-            enabled.add("webui-firewall")
     if config.get("STRATA_ENABLE_FAIL2BAN") == "1":
         enabled.add("fail2ban")
     components = Path(__file__).resolve().parents[1] / "components"
@@ -190,6 +179,11 @@ def main() -> None:
     try:
         config = load(args.config.resolve())
         validate(config, native=False)
+        if config["STRATA_BOOTLOADER"] != "limine-efi":
+            raise BuildError(
+                "make qemu requires STRATA_BOOTLOADER=limine-efi; "
+                "boot extlinux images with U-Boot or board firmware"
+            )
         arch = config["STRATA_ARCH"]
         output = args.output.resolve()
         image = output / "images" / f"strataos-{config['STRATA_VERSION']}-{arch}.img"
@@ -212,10 +206,7 @@ def main() -> None:
             raise BuildError("QEMU executable not found")
         overlay = prepare_overlay(image, output, config)
 
-        netdev = "user,id=net0,hostfwd=tcp::2222-:22,hostfwd=tcp::9090-:9090,hostfwd=tcp::6080-:6080,hostfwd=tcp::7681-:7681"
-        netdev += "," + ",".join(
-            f"hostfwd=tcp::{port}-:{port}" for port in range(7690, 7790)
-        )
+        netdev = "user,id=net0,hostfwd=tcp::2222-:22"
         command = [
             qemu,
             "-no-reboot",

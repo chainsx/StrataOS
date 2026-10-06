@@ -1,9 +1,0 @@
-name = "xdg-dbus-proxy"
-version = "0.1.6"
-kind = "target"
-build_system = "meson"
-dependencies = ["glib"]
-configure_args = ["-Dtests=false"]
-
-[source]
-url = "https://github.com/flatpak/xdg-dbus-proxy/releases/download/{version}/xdg-dbus-proxy-{version}.tar.xz"

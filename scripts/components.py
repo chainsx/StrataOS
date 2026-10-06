@@ -399,23 +399,12 @@ def build_components(config_path: Path, output: Path) -> list[Path]:
 
     if enabled(config, "STRATA_ENABLE_DOCKER"):
         selected.append("docker")
-    if enabled(config, "STRATA_ENABLE_FLATPAK"):
-        selected.append("flatpak")
     if enabled(config, "STRATA_ENABLE_GRAPHICS"):
         selected.append("graphics")
     if enabled(config, "STRATA_ENABLE_CJK_FONTS"):
         selected.append("fonts-cjk")
-    if enabled(config, "STRATA_ENABLE_WEBUI"):
-        selected.extend(("web-console", "webui"))
-        selected.extend(("webui-network", "webui-openssh", "webui-storage"))
-        if enabled(config, "STRATA_ENABLE_DOCKER"):
-            selected.append("webui-docker")
-        if enabled(config, "STRATA_ENABLE_FLATPAK") and enabled(config, "STRATA_ENABLE_GRAPHICS"):
-            selected.append("webui-flatpak")
     if enabled(config, "STRATA_ENABLE_FIREWALL"):
         selected.append("firewall")
-        if enabled(config, "STRATA_ENABLE_WEBUI"):
-            selected.append("webui-firewall")
     if enabled(config, "STRATA_ENABLE_FAIL2BAN"):
         selected.append("fail2ban")
     shutil.rmtree(output / "components", ignore_errors=True)

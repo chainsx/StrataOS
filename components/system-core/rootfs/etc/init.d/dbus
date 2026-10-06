@@ -6,7 +6,7 @@ command_background=yes
 pidfile=/run/dbus/pid
 output_log=/var/log/dbus.log
 error_log=/var/log/dbus.log
-depend() { need localmount; use logger; before flatpak; }
+depend() { need localmount; use logger; }
 start_pre() {
     checkpath --directory --owner messagebus:messagebus --mode 0755 /run/dbus
     checkpath --directory --owner messagebus:messagebus --mode 0755 /var/lib/dbus

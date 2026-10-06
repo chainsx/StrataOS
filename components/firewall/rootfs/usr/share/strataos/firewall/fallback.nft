@@ -9,7 +9,6 @@ table inet filter {
         ct state established,related accept
         iif lo accept
 
-        tcp dport { 22, 9090, 6080, 7681 } accept
-        tcp dport 7690-7789 accept
+        tcp dport 22 accept
     }
 }

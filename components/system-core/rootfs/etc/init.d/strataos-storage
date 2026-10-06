@@ -4,7 +4,7 @@ description="Validate StrataOS component-owned volume mounts"
 
 depend() {
     need localmount
-    before dbus sshd docker fail2ban strata-webui strataos-network strataos-logging
+    before dbus sshd docker fail2ban strataos-network strataos-logging
 }
 
 start() {

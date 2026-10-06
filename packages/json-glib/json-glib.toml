@@ -1,9 +1,0 @@
-name = "json-glib"
-version = "1.10.8"
-kind = "target"
-build_system = "meson"
-dependencies = ["glib"]
-configure_args = ["-Dtests=false", "-Dinstalled_tests=false", "-Dgtk_doc=disabled", "-Dman=false", "-Dintrospection=disabled"]
-
-[source]
-url = "https://download.gnome.org/sources/json-glib/1.10/json-glib-{version}.tar.xz"

@@ -29,12 +29,8 @@ Covers:
 - Network, OpenSSH, Fail2ban and Firewall component ownership and dependency
   ordering, root password login, persistent `/etc`
   overlay and first-boot account setup;
-- WebUI core/capability adapter, Web Console and Graphics dependencies, VNC WebSocket token auth, ttyd
-  cookie auth proxy, the power-action allowlist, Docker's read-only
-  interface, the Firewall component wiring (init script, `before docker`
-  ordering, protected-management-port rejection via `fw_deny_blocks_protected`,
-  `remove_rule` input validation, and the WebUI `/cgi-bin/firewall` integration),
-  and the WebUI's run account;
+- standalone Firewall component wiring, including protected SSH port rejection
+  and rollback behavior;
 - default no-redundancy, CRC32C integrity images and first-boot growth;
 - MD RAID1, dm-integrity, fsck, resize and logging critical paths;
 - unit tests for the native GPT writer's primary/backup GPT, partition
@@ -65,13 +61,8 @@ under the musl/Clang combination. Every release must at minimum perform:
 5. creation, degradation, re-assembly, growth and scrub for `none`,
    `mirror` and `integrity-mirror`;
 6. Docker container startup, networking, cgroup v2 and persistence;
-7. Flatpak install, run, update and persistence;
-8. the WebUI's system-info and power interfaces, the ttyd terminal,
-   Docker's read-only status, Flatpak app enumeration, and the end-to-end
-   Cage/wayvnc/noVNC keyboard/mouse/display chain;
-9. nftables preset application, rejection of rules targeting management
-   ports (SSH, WebUI, terminal, VNC), confirm persistence, and automatic
-   rollback of an unconfirmed change after its timeout;
+7. nftables preset application, rejection of rules targeting SSH, confirm persistence,
+   and automatic rollback of an unconfirmed change after its timeout;
 10. OpenSSH host key first generation, root login with the temporary
     password `strata`, first password change and administrator creation;
 11. component replacement, missing dependencies, wrong architecture,
@@ -82,23 +73,16 @@ under the musl/Clang combination. Every release must at minimum perform:
 
 ## Current delivery status
 
-The x86_64 engineering track has completed project-level static checks,
-unit tests, a real musl/Clang build of the graphics/WebUI dependency
-closure, 18-component image assembly, and UEFI/QEMU cold boot. In QEMU
-the WebUI's OpenRC service, unauthenticated-401 behavior, Bearer-authenticated
-system info, an empty Flatpak app list, WebSocket token rejection/handshake,
-and the safe-failure path for a nonexistent application have all been
-verified. A full default-runlevel audit found no stopped or crashed services;
-the idle system retained no Flatpak, bubblewrap, Cage, wayvnc or Flatpak proxy
-processes. An interactive `poweroff` stopped WebUI, Flatpak, Fail2ban, SSH,
-Docker, networking, D-Bus and logging in order, flushed component volumes,
-remounted the outer data filesystem read-only and reached ACPI S5 without an
-OpenRC failure.
+The x86_64 engineering track has completed project-level static checks, unit
+tests, a real musl/Clang build, component image assembly, and UEFI/QEMU cold
+boot. A full default-runlevel audit found no stopped or crashed services. An
+interactive `poweroff` stopped Fail2ban, SSH, Docker, networking, D-Bus and
+logging in order, flushed component volumes, remounted the outer data filesystem
+read-only and reached ACPI S5 without an OpenRC failure.
 
-Native ARM64 builds, real-hardware boot, HTTPS/PAM, multi-session support,
-and keyboard/mouse/display end-to-end verification after installing a real
-third-party Flatpak GUI application are not yet complete, so this still
-cannot be described as having passed full release certification.
+Native ARM64 builds, real-hardware boot, HTTPS/PAM, storage corruption injection,
+and recovery drills are not yet complete, so this still cannot be described as
+having passed full release certification.
 
 ### LLVM runtime pre-link validation
 

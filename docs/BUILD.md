@@ -25,9 +25,9 @@ On an Ubuntu 24.04 system, install the prerequisite packages:
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
-  python3 make patch perl rsync file unzip bc bison flex cpio \
-  gzip pigz bzip2 pbzip2 xz-utils gawk sed findutils tar \
-  zlib1g libstdc++6 appstream
+  python3 make patch perl rsync file unzip bc bison flex gettext gperf cpio \
+  gzip pigz bzip2 pbzip2 xz-utils gawk sed findutils tar which xsltproc docbook-xsl \
+  zlib1g libstdc++6 g++ groff-base
 ```
 
 The builder requires Python 3.11 or later.  Verify with
@@ -144,8 +144,8 @@ been defined and tested.
 
 Some upstream projects cannot link with LTO because of assembler symbol-version
 semantics. A target recipe may set `lto = "none"`, `"thin"` or `"full"` as a
-reviewed exception; `packages/fuse3/fuse3.toml` is an example. This keeps the
-exception declarative rather than adding package-name branches to the builder.
+reviewed exception. This keeps the exception declarative rather than adding
+package-name branches to the builder.
 
 Project-local packages use `build_system = "local"` and declare all three
 commands in their TOML recipe. The generic builder exports `STRATA_BUILD_DIR`
@@ -166,17 +166,34 @@ make qemu
 ```
 
 This requires `qemu-system-x86_64` (or `qemu-system-aarch64` for arm64)
-and OVMF UEFI firmware. The default QEMU invocation uses an EGL-headless
+and OVMF UEFI firmware. `make qemu` supports only
+`STRATA_BOOTLOADER=limine-efi`; use a U-Boot-capable board or emulator for an
+extlinux image. The default QEMU invocation uses an EGL-headless
 VirGL device and keeps the serial monitor on stdio, providing the guest with a
 DRM render node without opening a display window. It therefore requires a QEMU
 build with OpenGL/VirGL support. Set `STRATA_QEMU_GPU=none` to fall back to
-`-nographic` for boot-only diagnostics where Flatpak GPU sessions are not used.
+`-nographic` for boot-only diagnostics without a graphical session.
 It forwards port 2222 to the guest's SSH port.
 
 The launcher gives the virtio system disk a higher UEFI `bootindex` than the
 network adapter and refreshes writable OVMF VARS state when the raw image or GPU
 topology changes. This prevents a stale PCI device path from falling through to
 `Start PXE over IPv4` after switching between VirGL and serial-only launches.
+
+## Bootloader Selection
+
+`STRATA_BOOTLOADER` selects one boot payload for each image:
+
+- `limine-efi` (the default) installs Limine's UEFI executable under
+  `/EFI/BOOT/` and its `/limine.conf` entry on the ESP.
+- `extlinux` installs only `/extlinux/extlinux.conf` on the ESP. It uses the
+  same `/strataos/kernel`, `/strataos/initramfs.cpio.gz`, and kernel command
+  line, and is intended for U-Boot distributions with extlinux or `bootstd`
+  support.
+
+Select the image ESP as a U-Boot boot target, or load
+`/extlinux/extlinux.conf` through U-Boot's `sysboot` command. An extlinux image
+does not include an EFI executable or Limine configuration.
 
 The QEMU disk size is controlled by `STRATA_QEMU_DISK_MIB` in
 `.config`.  The default is 32768 MiB (32 GiB).  The builder computes a

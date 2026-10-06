@@ -12,20 +12,6 @@ The outer partition must be writable. The read-only guarantee applies to
 component SquashFS images, not to the outer partition that hosts the data
 volumes.
 
-## WebUI external disks
-
-When the `webui-storage` component is active, the Storage page exposes a
-bounded external-disk workflow modelled after LuCI DiskMan: inspect detected
-devices and partitions, create an ext4 or FAT32 filesystem on an unmounted
-partition, and mount it persistently at `/mnt/<name>`. The mount declaration
-is stored in `/etc/strataos/storage-mounts.conf` and restored by the
-`strataos-storage-mounts` OpenRC service.
-
-The UI only accepts partitions returned by `lsblk`; it rejects mounted system,
-state, boot, Docker and Flatpak paths. It does not edit partition tables,
-RAID members, loop devices or component backing files. Use the console and a
-verified backup procedure for those advanced operations.
-
 ## Default layout
 
 ```text
@@ -45,9 +31,8 @@ volumes/docker/docker.ext4
 ```
 
 The full default image currently declares volumes for `system-core`, `network`,
-`openssh`, `fail2ban`, `docker`, `flatpak`, and `webui-flatpak`. DHCP leases and
-the Fail2ban database no longer share generic system state. Other components
-and WebUI adapters remain read-only/stateless.
+`openssh`, `fail2ban`, and `docker`. DHCP leases and the Fail2ban database no
+longer share generic system state. Other components remain read-only/stateless.
 
 In mirrored mode:
 
@@ -187,14 +172,6 @@ component.
 `components.conf` does not duplicate storage settings: component activation
 and Data-image policy are separate, so disabling a component does not discard
 its retained Data image.
-
-## Component split migration
-
-A volume declaration may set `legacy_component=<old-owner>`. Before attaching
-the volume, initramfs adopts the old owner's simple backing file or both mirror
-members and honors its backend, size, growth and redundancy overrides. For the
-WebUI split, `webui-flatpak.webui` adopts `webui.webui`; this preserves existing
-Application Center data while moving ownership to the adapter that uses it.
 
 ## Online consistency checking
 

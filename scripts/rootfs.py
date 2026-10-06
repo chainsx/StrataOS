@@ -14,8 +14,6 @@ ACCOUNTS = {
     "messagebus": (81, 81),
     "sshd": (74, 74),
     "componentd": (201, 201),
-    "flatpak": (202, 202),
-    "webapp": (204, 204),
     "dhcpcd": (285, 285),
 }
 
@@ -33,12 +31,10 @@ GROUPS = {
     "messagebus": 81,
     "sshd": 74,
     "docker": 281,
-    "flatpak": 282,
     "netdev": 283,
     "dhcpcd": 285,
     "uucp": 284,
     "componentd": 201,
-    "webapp": 204,
 }
 
 ROOT_INITIAL_PASSWORD_HASH = (
@@ -60,11 +56,9 @@ def install_accounts(root: Path) -> None:
         "messagebus:x:81:81:D-Bus system user:/var/run/dbus:/sbin/nologin",
         "sshd:x:74:74:OpenSSH privilege separation:/var/empty:/sbin/nologin",
         "componentd:x:201:201:StrataOS component service:/var/empty:/sbin/nologin",
-        "flatpak:x:202:202:Flatpak service account:/var/lib/flatpak:/sbin/nologin",
-        "webapp:x:204:204:Web Flatpak session:/var/lib/strataos/webui/home:/sbin/nologin",
         "dhcpcd:x:285:285:DHCP client:/var/empty:/sbin/nologin",
     ]
-    group_members: dict[str, str] = {"render": "webapp", "video": "webapp"}
+    group_members: dict[str, str] = {}
     group = [f"{name}:x:{gid}:{group_members.get(name, '')}" for name, gid in GROUPS.items()]
     shadow = [
         f"root:{ROOT_INITIAL_PASSWORD_HASH}:1::::::",
@@ -72,8 +66,6 @@ def install_accounts(root: Path) -> None:
         "messagebus:!:1::::::",
         "sshd:!:1::::::",
         "componentd:!:1::::::",
-        "flatpak:!:1::::::",
-        "webapp:!:1::::::",
         "dhcpcd:!:1::::::",
     ]
     gshadow = [f"{name}:!::{group_members.get(name, '')}" for name in GROUPS]
@@ -94,7 +86,6 @@ def install_base_configuration(root: Path, config: dict[str, str]) -> None:
         ("home", 0o755),
         ("var/empty", 0o755),
         ("var/lib/dbus", 0o755),
-        ("var/lib/flatpak", 0o755),
         ("var/log", 0o750),
         ("var/spool/mail", 0o755),
         ("run", 0o755),
@@ -188,8 +179,6 @@ def ownership_for(relative: str, mode: int) -> tuple[int, int, int]:
     uid = gid = 0
     if relative == "var/lib/dbus" or relative.startswith("var/lib/dbus/"):
         uid = gid = 81
-    elif relative == "var/lib/flatpak" or relative.startswith("var/lib/flatpak/"):
-        uid = gid = 202
     elif relative == "var/empty" or relative.startswith("var/empty/"):
         uid = gid = 0
     return mode, uid, gid

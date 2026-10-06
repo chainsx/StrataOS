@@ -16,10 +16,7 @@ from recipes import load_toolchain_inputs
 
 EXPECTED_COMPONENTS = {
     "system-core", "kernel-modules", "network", "python", "diagnostics", "openssh", "docker",
-    "flatpak", "graphics", "fonts-cjk", "web-console", "webui", "firewall",
-    "fail2ban",
-    "webui-network", "webui-openssh", "webui-storage", "webui-firewall", "webui-docker",
-    "webui-flatpak",
+    "graphics", "fonts-cjk", "firewall", "fail2ban",
 }
 
 
@@ -61,8 +58,8 @@ def check_recipes(config: dict[str, str]) -> None:
                 fail(f"package {name} is assigned to both {assigned[name]} and {component}")
             assigned[name] = component
     required = {
-        "busybox", "openrc", "zsh", "openssh", "docker-static", "flatpak",
-        "wlroots", "cage", "wayvnc", "novnc", "strata-webui", "fail2ban",
+        "busybox", "openrc", "zsh", "openssh", "docker-static",
+        "wlroots", "cage", "wayvnc", "fail2ban",
     }
     if not required.issubset(assigned):
         fail("required runtime package assignments are incomplete")
@@ -80,7 +77,6 @@ def check_recipes(config: dict[str, str]) -> None:
         "mdadm": ("build_args", "install_args"),
         "iproute2": ("configure_args", "build_args", "install_args"),
         "dhcpcd": ("configure_args",),
-        "strata-webui": ("build_args", "test_args", "install_args"),
     }
     for name, phases in declared_special_options.items():
         recipe = recipes[name]
@@ -141,7 +137,7 @@ def check_components(config: dict[str, str]) -> None:
     required_volumes = {
         ("system-core", "state"), ("openssh", "identity"),
         ("network", "leases"), ("fail2ban", "database"),
-        ("docker", "docker"), ("flatpak", "flatpak"), ("webui-flatpak", "webui"),
+        ("docker", "docker"),
     }
     if not required_volumes.issubset(volume_keys):
         fail("required component-owned volumes are missing")

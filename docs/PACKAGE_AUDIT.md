@@ -16,28 +16,23 @@ The apparently overlapping packages are intentional:
   `network` component's iproute2 tools.
 - htop and lsof are isolated in the optional `diagnostics` component.
 - Python is included only once in its own component and is required by Fail2ban.
-  SQLite is a common library in `system-core`, shared by Python and Flatpak,
-  rather than being duplicated across components. `host-python` is a build-only,
+  SQLite is a common library in `system-core`, shared by Python and its
+  supporting system utilities rather than being duplicated across components. `host-python` is a build-only,
   same-version interpreter needed for CPython cross configuration.
-- Docker, Flatpak, graphics, CJK fonts, diagnostics, WebUI, firewall and
-  Fail2ban packages are selected only when their corresponding component or
-  parent feature switch is enabled. WebUI selects its `web-console` runtime
-  and capability adapters; the adapters contain no duplicate package payload.
+- Docker, graphics, CJK fonts, diagnostics, firewall and Fail2ban packages are
+  selected only when their corresponding component feature switch is enabled.
 
 ## Dependency coordination
 
 The graph is acyclic. Host recipes never depend on target artifacts. Target
 recipes use the musl sysroot and may use explicit host tools only for build-time
 code generation. Fail2ban depends on target Python and nftables; Python declares
-zlib, bzip2, OpenSSL, libffi, SQLite and ncurses. Docker and Flatpak remain
+zlib, bzip2, OpenSSL, libffi, SQLite and ncurses. Docker and graphics remain
 independent optional branches.
 
 Component/runtime ordering is also explicit: Network precedes OpenSSH and
 Firewall; Fail2ban requires Python, OpenSSH and Firewall and loads after all
-three. WebUI capability code is split into `webui-network`, `webui-openssh`,
-`webui-firewall`, `webui-docker`, and `webui-flatpak`. The core discovers
-`/run/strataos/components.seen` and does not expose controls whose adapter is
-absent.
+three.
 
 ## Build parameters
 

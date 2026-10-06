@@ -52,7 +52,6 @@ SPECIAL_CONTRACTS: dict[str, tuple[str, ...]] = {
     "musl-runtime": (),
     "llvm-runtime": (),
     "llvm-libs": ("llvm/CMakeLists.txt", "libclc/CMakeLists.txt"),
-    "novnc": ("core/rfb.js", "vendor"),
     "fail2ban": ("fail2ban/server", "config/action.d/nftables.conf", "bin/fail2ban-server"),
     "host-python-module": (),
 }
@@ -77,7 +76,6 @@ SPECIAL_HANDLER_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "musl-runtime": ("libc.so",),
     "llvm-libs": ("recipe.configure_args", "llvm-tblgen", "--parallel", "DESTDIR", "libclc"),
     "llvm-runtime": ("libc++.so", "libunwind.so"),
-    "novnc": ("noVNC archive misses", "copytree"),
     "fail2ban": ("python3.13/site-packages", "fail2ban-client", "config"),
     "host-python-module": ("site-packages", "copytree", "import {module_name}"),
 }

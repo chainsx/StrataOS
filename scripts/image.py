@@ -39,6 +39,53 @@ def int_value(data: dict[str, str], key: str) -> int:
         raise BuildError(f"{key} must be an integer") from exc
 
 
+def kernel_command_line(arch: str, esp_label: str, data_label: str, data_fs: str) -> str:
+    console = (
+        "console=tty0 console=ttyS0,115200"
+        if arch == "x86_64"
+        else "console=ttyAMA0,115200 console=tty0"
+    )
+    # x86_64 KVM guests suffer from TSC clocksource watchdog false positives.
+    clocksource_args = "clocksource=tsc tsc=nowatchdog" if arch == "x86_64" else ""
+    return " ".join(
+        value
+        for value in (
+            "rdinit=/init",
+            f"strata.esp_label={esp_label}",
+            f"strata.data_label={data_label}",
+            f"strata.data_fs={data_fs}",
+            console,
+            clocksource_args,
+            "panic=10",
+        )
+        if value
+    )
+
+
+def extlinux_config(command_line: str) -> str:
+    return (
+        "DEFAULT strataos\n"
+        "PROMPT 0\n"
+        "TIMEOUT 30\n\n"
+        "LABEL strataos\n"
+        "    MENU LABEL StrataOS\n"
+        "    LINUX /strataos/kernel\n"
+        "    INITRD /strataos/initramfs.cpio.gz\n"
+        f"    APPEND {command_line}\n"
+    )
+
+
+def limine_config(command_line: str) -> str:
+    return (
+        "timeout: 3\n\n"
+        "/StrataOS\n"
+        "    protocol: linux\n"
+        "    path: boot():/strataos/kernel\n"
+        "    module_path: boot():/strataos/initramfs.cpio.gz\n"
+        f"    cmdline: {command_line}\n"
+    )
+
+
 def align_up(value: int, alignment: int) -> int:
     return ((value + alignment - 1) // alignment) * alignment
 
@@ -166,6 +213,7 @@ def build_image(config_path: Path, output: Path) -> Path:
     disk = load_data(ROOT / "configs/image/disk.conf")
     storage = load_data(ROOT / "configs/runtime/storage.conf")
     arch = config["STRATA_ARCH"]
+    bootloader = config["STRATA_BOOTLOADER"]
     parallel = jobs(int(config.get("STRATA_JOBS", "0")))
     host = output / "host"
     kernel = output / "kernel/kernel"
@@ -182,16 +230,18 @@ def build_image(config_path: Path, output: Path) -> Path:
     mcopy = find_tool(host, "mcopy")
     mke2fs = find_tool(host, "mkfs.ext4", "mke2fs")
 
-    limine_input = load_toolchain_input("limine")
-    if limine_input.version != config["STRATA_LIMINE_VERSION"]:
-        raise BuildError(f"{limine_input.path}: version disagrees with build configuration")
-    limine_source = limine_input.source_for_arch(arch)
-    limine_archive = fetch_source(limine_source, limine_input.version, output / "dl")
-    limine = extract(
-        limine_archive, output / "src/limine", strip_components=limine_source.strip_components,
-        parallelism=parallel,
-    )
-    efi = find_limine_efi(limine, arch)
+    efi: Path | None = None
+    if bootloader == "limine-efi":
+        limine_input = load_toolchain_input("limine")
+        if limine_input.version != config["STRATA_LIMINE_VERSION"]:
+            raise BuildError(f"{limine_input.path}: version disagrees with build configuration")
+        limine_source = limine_input.source_for_arch(arch)
+        limine_archive = fetch_source(limine_source, limine_input.version, output / "dl")
+        limine = extract(
+            limine_archive, output / "src/limine", strip_components=limine_source.strip_components,
+            parallelism=parallel,
+        )
+        efi = find_limine_efi(limine, arch)
 
     staging = output / "image-staging"
     shutil.rmtree(staging, ignore_errors=True)
@@ -202,9 +252,6 @@ def build_image(config_path: Path, output: Path) -> Path:
     for directory in (esp_root, data_root, inputs, final_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
-    boot_name = "BOOTX64.EFI" if arch == "x86_64" else "BOOTAA64.EFI"
-    (esp_root / "EFI/BOOT").mkdir(parents=True)
-    shutil.copy2(efi, esp_root / "EFI/BOOT" / boot_name)
     strata_esp = esp_root / "strataos"
     (strata_esp / "config").mkdir(parents=True)
     shutil.copy2(kernel, strata_esp / "kernel")
@@ -217,25 +264,26 @@ def build_image(config_path: Path, output: Path) -> Path:
     }
     for filename, source_path in config_files.items():
         shutil.copy2(source_path, strata_esp / "config" / filename)
-    console = "console=tty0 console=ttyS0,115200" if arch == "x86_64" else "console=ttyAMA0,115200 console=tty0"
-    # x86_64 KVM guests suffer from TSC clocksource watchdog false positives.
-    # Disable the watchdog and force TSC as the preferred clocksource.
-    clocksource_args = "clocksource=tsc tsc=nowatchdog" if arch == "x86_64" else ""
     esp_label = disk["partition.esp.label"]
     data_label = disk["partition.data.label"]
     data_fs = disk["partition.data.filesystem"]
+    command_line = kernel_command_line(arch, esp_label, data_label, data_fs)
     if data_fs != "ext4":
         raise BuildError("native image builder currently supports ext4 for the outer data partition")
-    (esp_root / "limine.conf").write_text(
-        "timeout: 3\n\n"
-        "/StrataOS\n"
-        "    protocol: linux\n"
-        "    path: boot():/strataos/kernel\n"
-        "    module_path: boot():/strataos/initramfs.cpio.gz\n"
-f"    cmdline: rdinit=/init strata.esp_label={esp_label} "
-f"strata.data_label={data_label} strata.data_fs={data_fs} {console} "
-f"{clocksource_args} panic=10\n"
-    )
+    esp_entries = [strata_esp]
+    if bootloader == "limine-efi":
+        if efi is None:
+            raise BuildError("Limine EFI binary is missing")
+        boot_name = "BOOTX64.EFI" if arch == "x86_64" else "BOOTAA64.EFI"
+        (esp_root / "EFI/BOOT").mkdir(parents=True)
+        shutil.copy2(efi, esp_root / "EFI/BOOT" / boot_name)
+        (esp_root / "limine.conf").write_text(limine_config(command_line))
+        esp_entries.append(esp_root / "EFI")
+    else:
+        extlinux_dir = esp_root / "extlinux"
+        extlinux_dir.mkdir()
+        (extlinux_dir / "extlinux.conf").write_text(extlinux_config(command_line))
+        esp_entries.append(extlinux_dir)
 
     data_path = storage.get("backend.data.path", "/strataos")
     if not data_path.startswith("/") or ".." in Path(data_path).parts:
@@ -253,6 +301,7 @@ f"{clocksource_args} panic=10\n"
         "name": "StrataOS",
         "version": config["STRATA_VERSION"],
         "architecture": arch,
+        "bootloader": bootloader,
         "linux": load_recipe("linux").version,
         "llvm": config["STRATA_LLVM_VERSION"],
         "build_backend": "strataos-native",
@@ -300,9 +349,10 @@ f"{clocksource_args} panic=10\n"
         handle.truncate(esp_sectors * sector_size)
     run([str(mkfs_fat), "-F", "32", "-n", esp_label, str(esp_image)])
     env = {"MTOOLS_SKIP_CHECK": "1"}
-    for entry in (esp_root / "EFI", strata_esp):
+    for entry in esp_entries:
         run([str(mcopy), "-i", str(esp_image), "-s", str(entry), "::/"], env=env)
-    run([str(mcopy), "-i", str(esp_image), str(esp_root / "limine.conf"), "::/limine.conf"], env=env)
+    if bootloader == "limine-efi":
+        run([str(mcopy), "-i", str(esp_image), str(esp_root / "limine.conf"), "::/limine.conf"], env=env)
 
     with data_image.open("wb") as handle:
         handle.truncate(data_sectors * sector_size)

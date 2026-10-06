@@ -36,12 +36,6 @@ Docker requires namespaces, PID/network/IPC/UTS/mount and user namespaces,
 `CONFIG_SECCOMP`, `CONFIG_SECCOMP_FILTER`, Veth, bridge netfilter, OverlayFS and
 nftables NAT/connection tracking.
 
-## Flatpak component
-
-Flatpak/bubblewrap requires namespaces, user namespaces, seccomp filtering,
-`CONFIG_FUSE_FS` and Unix-domain sockets. GPG verification and OSTree add no
-kernel options.
-
 ## graphics component
 
 Both generic images build the DRM core and VirtIO GPU driver into the kernel, so
@@ -49,11 +43,6 @@ QEMU/KVM guests expose a DRM render node for Mesa. Physical machines additionall
 need their exact DRM/KMS and GPU driver enabled in the architecture or device
 kernel seed, together with any required input, USB controller and connector
 drivers; those cannot be chosen generically without a device target.
-
-## WebUI component
-
-httpd, ttyd, TLS and WebSocket proxies need TCP/IP, Unix sockets, pseudo terminals
-and devpts. Flatpak viewing also needs the Flatpak and graphics requirements.
 
 ## firewall component
 
