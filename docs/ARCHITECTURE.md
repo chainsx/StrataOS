@@ -19,6 +19,9 @@ The core constraints of StrataOS are:
     are immutable SquashFS images.
 4.  The build entry point is simple, automated, and requires no
     external distribution build tree or package database.
+5.  The base image is headless. It includes no display server, desktop,
+    remote framebuffer service, or GPU userspace; system administration uses
+    the serial console or OpenSSH.
 
 ## Build Pipeline
 
@@ -155,8 +158,16 @@ the target sysroot.
 
 ## Boot Architecture
 
-The UEFI firmware loads Limine from the ESP.  Limine loads the Linux
-kernel and initramfs.  The initramfs performs the following sequence:
+`STRATA_BOOTLOADER` selects exactly one boot path while the image is built:
+
+- `limine-efi` (the default) has UEFI firmware load Limine from the ESP, then
+  Limine loads the Linux kernel and initramfs.
+- `extlinux` provides `/extlinux/extlinux.conf` for U-Boot `bootstd` or
+  `sysboot` to load the same kernel and initramfs. This image has no EFI
+  executable or Limine configuration.
+
+After either loader starts the kernel, the initramfs performs the following
+sequence:
 
 1.  Locate the ESP and data partitions by filesystem label;
 2.  If necessary, grow the trailing data partition and its outer ext4

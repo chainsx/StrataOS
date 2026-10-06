@@ -5,7 +5,8 @@ upstream source code and targeting UEFI Class 3 devices or U-Boot platforms
 with extlinux support. The target
 system consists of OpenRC, Zsh, musl libc, the LLVM/Clang toolchain,
 Linux 6.18, and OpenSSH. Docker and CJK fonts are selectable
-components.
+components. It is deliberately headless: the base image contains no display
+server, desktop environment, remote framebuffer service, or GPU userspace.
 
 This program is free software.  See the file LICENSE for copying
 conditions.
@@ -17,8 +18,8 @@ STRATA_BOOTLOADER=limine-efi: UEFI -> Limine -> Linux kernel + initramfs
 STRATA_BOOTLOADER=extlinux:   U-Boot -> extlinux.conf -> Linux kernel + initramfs
                                                         |
                                                         v
-                        system-core + optional Docker / Graphics / CJK Fonts /
-                        Firewall / Fail2ban / Diagnostics component images
+                        system-core + optional Docker / CJK Fonts / Firewall /
+                        Fail2ban / Diagnostics component images
                                                         |
                                                         v
                                              OverlayFS -> OpenRC
@@ -93,6 +94,12 @@ STRATA_BOOTLOADER=limine-efi Select the Limine UEFI image (or `extlinux`)
 When disabled, the corresponding packages are neither fetched nor
 compiled, and the disk image excludes their SquashFS images and data
 volumes.
+
+StrataOS intentionally provides no graphical login, desktop, display server,
+or remote framebuffer service. Manage a running image through its serial
+console or OpenSSH; `make qemu` also starts with a serial `-nographic`
+console. The CJK font component only supplies font data for software installed
+by an administrator or in a container.
 
 ### Adding a Custom Component
 

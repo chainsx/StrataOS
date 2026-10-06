@@ -56,7 +56,8 @@ under the musl/Clang combination. Every release must at minimum perform:
 1. native x86_64 and arm64 networked builds;
 2. checking interpreter, NEEDED, RPATH/RUNPATH and architecture for every
    target ELF;
-3. UEFI/QEMU cold boot, repeated boot and rollback;
+3. UEFI/QEMU serial-console cold boot, repeated boot and rollback, confirming
+   the `-nographic` launch has no display or GPU device;
 4. first-boot growth of the data partition and capacity boundaries;
 5. creation, degradation, re-assembly, growth and scrub for `none`,
    `mirror` and `integrity-mirror`;

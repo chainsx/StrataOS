@@ -156,6 +156,10 @@ in place before the Docker daemon starts; note that a component's
 `after`/`priority` fields only order squashfs assembly and are not the runtime
 boot-order mechanism, which OpenRC's `depend()` block provides instead.
 
+No graphical component is shipped. The standard image has no display server,
+desktop environment, remote framebuffer service, or GPU userspace; the serial
+console and OpenSSH are the supported management interfaces.
+
 The default full image therefore contains 10 components. Component root paths
 are exposed to OverlayFS through short initramfs-only aliases; this is an
 implementation detail that prevents a long colon-separated `lowerdir` option

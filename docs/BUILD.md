@@ -169,7 +169,8 @@ This requires `qemu-system-x86_64` (or `qemu-system-aarch64` for arm64)
 and OVMF UEFI firmware. `make qemu` supports only
 `STRATA_BOOTLOADER=limine-efi`; use a U-Boot-capable board or emulator for an
 extlinux image. The default QEMU invocation uses `-nographic` and exposes the
-serial monitor on standard I/O. It forwards port 2222 to the guest's SSH port.
+serial monitor on standard I/O. It creates no GPU or display device; interact
+through the console or through port 2222 forwarded to the guest's SSH port.
 
 The launcher gives the virtio system disk a higher UEFI `bootindex` than the
 network adapter and refreshes writable OVMF VARS state when the raw image
